@@ -6,7 +6,7 @@
   "engines": { "node": ">=22" },
   "bin": { "skillbench": "dist/src/cli.js" },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"if (process.platform !== 'win32') require('node:fs').chmodSync('dist/src/cli.js', 0o755)\"",
     "check": "npm run lint && npm run typecheck && npm test",
     "lint": "eslint src tests",
     "test": "node --import tsx --test tests/**/*.test.ts",

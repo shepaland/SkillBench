@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { ValidationError } from "../../src/domain/errors.js";
 import { canonicalJson } from "../../src/integrity/canonical-json.js";
 import { hashFile, hashTree, hashValue } from "../../src/integrity/content-hash.js";
 
@@ -13,28 +14,28 @@ test("canonical JSON ignores object insertion order but preserves array order", 
 });
 
 test("canonical JSON rejects values outside its portable data model", () => {
-  assert.throws(() => canonicalJson(undefined));
-  assert.throws(() => canonicalJson(Number.NaN));
-  assert.throws(() => canonicalJson(1n));
-  assert.throws(() => canonicalJson(() => undefined));
-  assert.throws(() => canonicalJson(Symbol("value")));
-  assert.throws(() => canonicalJson(new Date()));
+  assertCanonicalValidation(undefined, "canonical JSON does not support undefined values");
+  assertCanonicalValidation(Number.NaN, "canonical JSON does not support non-finite numbers");
+  assertCanonicalValidation(1n, "canonical JSON does not support bigint values");
+  assertCanonicalValidation(() => undefined, "canonical JSON does not support function values");
+  assertCanonicalValidation(Symbol("value"), "canonical JSON does not support symbol values");
+  assertCanonicalValidation(new Date(), "canonical JSON only supports plain objects");
 
   const cycle: { self?: unknown } = {};
   cycle.self = cycle;
-  assert.throws(() => canonicalJson(cycle));
+  assertCanonicalValidation(cycle, "canonical JSON does not support cyclic values");
 });
 
 test("canonical JSON rejects sparse array holes", () => {
   const sparse = new Array<unknown>(1);
-  assert.throws(() => canonicalJson(sparse));
+  assertCanonicalValidation(sparse, "canonical JSON does not support sparse array holes");
 });
 
 test("canonical JSON rejects objects with symbol keys", () => {
   const hidden = Symbol("hidden");
   const symbolKeyed: Record<PropertyKey, unknown> = { visible: "value" };
   symbolKeyed[hidden] = "not serializable";
-  assert.throws(() => canonicalJson(symbolKeyed));
+  assertCanonicalValidation(symbolKeyed, "canonical JSON does not support symbol keys");
 });
 
 test("tree hashes include normalized relative paths and bytes", async () => {
@@ -54,6 +55,29 @@ test("file hashing uses raw bytes and tree hashing rejects symbolic links", asyn
   const file = join(root, "value.txt");
   await writeFile(file, "same");
   assert.equal(await hashFile(file), "sha256:0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5");
-  await symlink(file, join(root, "link.txt"));
-  await assert.rejects(hashTree(root));
+  try {
+    await symlink(file, join(root, "link.txt"));
+  } catch (error: unknown) {
+    if (isSymlinkUnsupported(error)) {
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(
+    hashTree(root),
+    (error: unknown) => error instanceof ValidationError &&
+      error.message === "symbolic links are not supported in hashed trees: link.txt",
+  );
 });
+
+function assertCanonicalValidation(value: unknown, message: string): void {
+  assert.throws(
+    () => canonicalJson(value),
+    (error: unknown) => error instanceof ValidationError && error.exitCode === 2 && error.message === message,
+  );
+}
+
+function isSymlinkUnsupported(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    ((error.code === "EPERM") || (error.code === "EACCES") || (error.code === "ENOTSUP"));
+}

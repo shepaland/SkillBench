@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { CommanderError } from "commander";
 import { pathToFileURL } from "node:url";
 import { createProgram } from "./cli/create-program.js";

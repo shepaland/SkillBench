@@ -95,6 +95,10 @@ test("fake adapter emits a deterministic two-step transcript and continues betwe
     }
   }
   assert.equal(Object.isFrozen(execution.events), true);
+  assert.equal(Object.isFrozen(execution), true);
+  assert.equal(Object.isFrozen(execution.process), true);
+  assert.equal(Object.isFrozen(execution.usage), true);
+  assert.equal(Object.isFrozen(execution.metadata), true);
   const firstCommand = execution.events[3];
   assert.ok(firstCommand !== undefined);
   assert.equal(Object.isFrozen(firstCommand), true);
@@ -113,8 +117,8 @@ test("fake adapter emits a deterministic two-step transcript and continues betwe
   assert.equal(Object.isFrozen(continuation.events), true);
 });
 
-test("fake adapter rejects scripts whose step IDs do not exactly match the prompt steps", async () => {
-  const input: RuntimeInput = {
+function createInput(): RuntimeInput {
+  return {
     workspace: "/intentionally-unread-workspace",
     promptSteps: [{ id: "expected", prompt: "Do work." }],
     config: {
@@ -125,13 +129,31 @@ test("fake adapter rejects scripts whose step IDs do not exactly match the promp
     },
     onContinuation: () => Promise.resolve()
   };
-  const script: FakeScript = {
-    steps: [{ stepId: "unexpected", events: [] }],
+}
+
+function createScript(steps: FakeScript["steps"]): FakeScript {
+  return {
+    steps,
     closeAfterMs: 0,
     process: { exitCode: null, signal: null, timedOut: false },
     usage: null,
     metadata: { runtimeVersion: "fake-runtime-1.0", adapterVersion: "fake-adapter-1.0" }
   };
+}
 
-  await assert.rejects(() => new FakeAdapter(script).execute(input), /script step IDs must exactly match prompt step IDs/);
+test("fake adapter rejects scripts with a missing prompt step ID", async () => {
+  await assert.rejects(
+    () => new FakeAdapter(createScript([])).execute(createInput()),
+    /script step IDs must exactly match prompt step IDs/,
+  );
+});
+
+test("fake adapter rejects scripts with an extra step ID", async () => {
+  await assert.rejects(
+    () => new FakeAdapter(createScript([
+      { stepId: "expected", events: [] },
+      { stepId: "unexpected", events: [] },
+    ])).execute(createInput()),
+    /script step IDs must exactly match prompt step IDs/,
+  );
 });
