@@ -8,6 +8,7 @@ import {
   copySafeTree,
   createAbsentParents,
   isSameOrInside,
+  rollbackCreatedEmptyDirectories,
   rollbackCreatedPaths,
 } from "../filesystem/safe-tree.js";
 import { hashTree, hashValue } from "../integrity/content-hash.js";
@@ -38,8 +39,8 @@ export async function installVariant(input: InstallVariantInput): Promise<Varian
   try {
     for (const mapping of mappings) {
       createdParents.push(...await createAbsentParents(input.workspacePath, mapping.destination));
-      copiedDestinations.push(mapping.destination);
       await copySafeTree(mapping.sourcePath, mapping.destination);
+      copiedDestinations.push(mapping.destination);
     }
 
     const material = [];
@@ -156,7 +157,8 @@ async function rollbackAfterFailure(
     ? cause
     : new FileLifecycleError("UNSAFE_FILESYSTEM_INPUT", `variant installation failed: ${errorMessage(cause)}`, { cause });
   try {
-    await rollbackCreatedPaths([...copiedDestinations, ...createdParents]);
+    await rollbackCreatedPaths(copiedDestinations);
+    await rollbackCreatedEmptyDirectories(createdParents);
   } catch (cleanupFailure: unknown) {
     return new FileLifecycleError(primary.code, primary.message, { cause: primary, cleanupFailure });
   }

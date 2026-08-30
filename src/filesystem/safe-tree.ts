@@ -1,4 +1,5 @@
-import { copyFile, lstat, mkdir, readdir, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, rm, rmdir } from "node:fs/promises";
+import { constants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
@@ -7,11 +8,12 @@ export interface SafeTreeFileSystem {
   lstat(path: string): ReturnType<typeof lstat>;
   readdir(path: string, options: { withFileTypes: true }): Promise<Dirent[]>;
   mkdir(path: string): Promise<unknown>;
-  copyFile(source: string, destination: string): Promise<void>;
+  copyFile(source: string, destination: string, mode?: number): Promise<void>;
   rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+  rmdir(path: string): Promise<void>;
 }
 
-export const safeTreeFileSystem: SafeTreeFileSystem = { lstat, readdir, mkdir, copyFile, rm };
+export const safeTreeFileSystem: SafeTreeFileSystem = { lstat, readdir, mkdir, copyFile, rm, rmdir };
 
 export function isSameOrInside(parent: string, candidate: string): boolean {
   const child = relative(parent, candidate);
@@ -24,7 +26,20 @@ export async function copySafeTree(
   fileSystem: SafeTreeFileSystem = safeTreeFileSystem,
 ): Promise<readonly string[]> {
   const created: string[] = [];
-  await copyEntry(source, destination, "", created, fileSystem);
+  try {
+    await copyEntry(source, destination, "", created, fileSystem);
+  } catch (cause: unknown) {
+    try {
+      await rollbackCreatedPaths(created, fileSystem);
+    } catch (cleanupFailure: unknown) {
+      throw new FileLifecycleError(
+        cause instanceof FileLifecycleError ? cause.code : "UNSAFE_FILESYSTEM_INPUT",
+        `safe tree copy failed: ${errorMessage(cause)}`,
+        { cause, cleanupFailure },
+      );
+    }
+    throw cause;
+  }
   return created;
 }
 
@@ -42,23 +57,28 @@ export async function createAbsentParents(
   }
 
   const created: string[] = [];
-  let candidate = root;
-  for (const segment of parentDirectory.split(/[\\/]/u)) {
-    if (segment === "" || segment === ".") continue;
-    candidate = join(candidate, segment);
-    try {
-      const status = await fileSystem.lstat(candidate);
-      if (status.isSymbolicLink() || !status.isDirectory()) {
-        throw new FileLifecycleError(
-          "UNSAFE_FILESYSTEM_INPUT",
-          `destination parent is not a safe directory: ${candidate}`,
-        );
+  try {
+    let candidate = root;
+    for (const segment of parentDirectory.split(/[\\/]/u)) {
+      if (segment === "" || segment === ".") continue;
+      candidate = join(candidate, segment);
+      try {
+        const status = await fileSystem.lstat(candidate);
+        if (status.isSymbolicLink() || !status.isDirectory()) {
+          throw new FileLifecycleError(
+            "UNSAFE_FILESYSTEM_INPUT",
+            `destination parent is not a safe directory: ${candidate}`,
+          );
+        }
+      } catch (error: unknown) {
+        if (!isMissingPath(error)) throw error;
+        await fileSystem.mkdir(candidate);
+        created.push(candidate);
       }
-    } catch (error: unknown) {
-      if (!isMissingPath(error)) throw error;
-      await fileSystem.mkdir(candidate);
-      created.push(candidate);
     }
+  } catch (cause: unknown) {
+    await rollbackCreatedEmptyDirectories(created, fileSystem);
+    throw cause;
   }
   return created;
 }
@@ -78,8 +98,8 @@ async function copyEntry(
     );
   }
   if (status.isFile()) {
+    await fileSystem.copyFile(source, destination, constants.COPYFILE_EXCL);
     created.push(destination);
-    await fileSystem.copyFile(source, destination);
     return;
   }
 
@@ -108,6 +128,29 @@ export async function rollbackCreatedPaths(
   }
 }
 
+export async function rollbackCreatedEmptyDirectories(
+  created: readonly string[],
+  fileSystem: SafeTreeFileSystem = safeTreeFileSystem,
+): Promise<void> {
+  for (const path of [...created].sort((left, right) => right.length - left.length)) {
+    try {
+      await fileSystem.rmdir(path);
+    } catch (error: unknown) {
+      if (isMissingPath(error) || isNonEmptyDirectory(error)) continue;
+      throw error;
+    }
+  }
+}
+
 function isMissingPath(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isNonEmptyDirectory(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    (error.code === "ENOTEMPTY" || error.code === "EEXIST");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

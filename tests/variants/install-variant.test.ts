@@ -10,6 +10,7 @@ import { hashTree, hashValue } from "../../src/integrity/content-hash.js";
 import { materializeWorkspace } from "../../src/workspace/materialize-workspace.js";
 import { installVariant } from "../../src/variants/install-variant.js";
 import { ProjectPaths } from "../../src/paths/project-paths.js";
+import { safeTreeFileSystem } from "../../src/filesystem/safe-tree.js";
 import { createTempProject, writeJson } from "../helpers/temp-project.js";
 
 test("installs an empty control without writing to the workspace", async () => {
@@ -121,6 +122,59 @@ test("rolls back copied material when a source changes after catalog loading", a
     await assert.rejects(() => access(join(workspace.workspacePath, ".codex/skills/example")), { code: "ENOENT" });
     assert.equal(await hashTree(workspace.workspacePath), before);
   } finally {
+    await workspace.cleanup();
+  }
+});
+
+test("preserves a destination created after preflight when its copy creation fails", async () => {
+  const project = await createTempProject();
+  const variant = await exampleVariant(project.root);
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const destination = join(workspace.workspacePath, ".codex/skills/example");
+  const originalMkdir = safeTreeFileSystem.mkdir.bind(safeTreeFileSystem);
+  let injected = false;
+  safeTreeFileSystem.mkdir = async (path: string): Promise<unknown> => {
+    if (path === destination) {
+      injected = true;
+      await originalMkdir(path);
+      await writeFile(join(path, "foreign.md"), "foreign destination\n");
+      throw errno("EEXIST", "forced destination creation conflict");
+    }
+    return originalMkdir(path);
+  };
+  try {
+    await assertFileLifecycleError(
+      () => installVariant({ variant, runtime: "codex", workspacePath: workspace.workspacePath }),
+      "UNSAFE_FILESYSTEM_INPUT",
+    );
+    assert.ok(injected);
+    assert.equal(await readFile(join(destination, "foreign.md"), "utf8"), "foreign destination\n");
+  } finally {
+    safeTreeFileSystem.mkdir = originalMkdir;
+    await workspace.cleanup();
+  }
+});
+
+test("removes parents created before parent creation fails", async () => {
+  const project = await createTempProject();
+  const variant = await exampleVariant(project.root);
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const failingParent = join(workspace.workspacePath, ".codex/skills");
+  const originalMkdir = safeTreeFileSystem.mkdir.bind(safeTreeFileSystem);
+  safeTreeFileSystem.mkdir = async (path: string): Promise<unknown> => {
+    if (path === failingParent) throw errno("EACCES", "forced parent creation failure");
+    return originalMkdir(path);
+  };
+  try {
+    await assertFileLifecycleError(
+      () => installVariant({ variant, runtime: "codex", workspacePath: workspace.workspacePath }),
+      "UNSAFE_FILESYSTEM_INPUT",
+    );
+    await assert.rejects(() => access(join(workspace.workspacePath, ".codex")), { code: "ENOENT" });
+  } finally {
+    safeTreeFileSystem.mkdir = originalMkdir;
     await workspace.cleanup();
   }
 });
@@ -255,4 +309,8 @@ async function mkdirTempDirectory(): Promise<string> {
 function isSymlinkUnsupported(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error &&
     ((error.code === "EPERM") || (error.code === "EACCES") || (error.code === "ENOTSUP"));
+}
+
+function errno(code: string, message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
 }
