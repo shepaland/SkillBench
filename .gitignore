@@ -5,7 +5,7 @@ coverage/
 
 # Private benchmark inputs and generated runs
 .private/
-runs/
+/runs/
 
 # Local agent state and working materials
 .agents/
