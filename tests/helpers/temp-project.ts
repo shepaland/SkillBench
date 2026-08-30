@@ -78,7 +78,7 @@ export async function createTempProject(): Promise<TempProject> {
     schemaVersion: 1,
     id: "control",
     displayName: "Control",
-    compatibleRuntimes: ["codex"],
+    compatibleRuntimes: ["codex", "fake"],
     installs: [],
     claimedCategories: ["implementation"],
     environment: {},
@@ -90,11 +90,11 @@ export async function createTempProject(): Promise<TempProject> {
     schemaVersion: 1,
     id: "example",
     displayName: "Example",
-    compatibleRuntimes: ["codex"],
+    compatibleRuntimes: ["codex", "fake"],
     installs: [
       {
         source: installSource,
-        destinations: { codex: ".codex/skills/example" },
+        destinations: { codex: ".codex/skills/example", fake: ".agent/skills/example" },
       },
     ],
     claimedCategories: ["implementation"],

@@ -71,3 +71,11 @@ export interface RunManifest {
   readonly limits: RuntimeLimits;
   readonly repetitionIndex: number;
 }
+
+export interface FrozenRunManifest extends RunManifest {
+  readonly schemaVersion: 1;
+  readonly runId: string;
+  readonly caseId: string;
+  readonly variantId: string;
+  readonly runtime: string;
+}
