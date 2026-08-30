@@ -79,3 +79,16 @@ export interface FrozenRunManifest extends RunManifest {
   readonly variantId: string;
   readonly runtime: string;
 }
+
+export interface OracleCheck {
+  readonly assertionId: string;
+  readonly command: TypedCommand;
+  readonly workingDirectory: string;
+  readonly timeoutMs: number;
+}
+
+export interface OracleManifest {
+  readonly schemaVersion: 1;
+  readonly caseId: string;
+  readonly checks: readonly OracleCheck[];
+}
