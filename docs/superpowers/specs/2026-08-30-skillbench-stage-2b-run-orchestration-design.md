@@ -217,8 +217,14 @@ preserves oracle material.
 Exit codes: `0` when every requested run reached status `completed` with every
 critical assertion passed; `1` when a run reached status `completed` with a
 failed critical assertion or reached status `exhausted`; `2` for invalid
-invocation, unknown identifiers, an unavailable oracle, or any run that reached
-status `errored`.
+invocation, unknown identifiers, an unavailable oracle, any run that reached
+status `errored`, or any run that failed to remove its temporary oracle
+material.
+
+Code `2` takes precedence over code `1`. Leftover private oracle material is a
+containment failure, and it is reported even when the same invocation also has a
+run that did not solve the case; the per-run report still names every failed
+assertion.
 
 Default output is a human-readable per-run summary. `--json` prints the same
 summary as a machine-readable document. Neither form replaces `result.json`,
