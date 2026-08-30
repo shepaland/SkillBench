@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile, rm, symlink } from "node:fs/promises";
+import { access, mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
@@ -272,6 +272,171 @@ test("removes mounted grading material on successful cleanup", async () => {
     const mounted = await oracle.mountOracle();
     await oracle.cleanup();
     await assert.rejects(access(mounted.gradingPath), { code: "ENOENT" });
+  } finally {
+    await oracle.cleanup();
+    await workspace.cleanup();
+  }
+});
+
+test("rejects an existing allocator result outside its temporary parent without copying or removing it", async () => {
+  const project = await createTempProject();
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const existingDirectory = join(project.root, "existing-disjoint-directory");
+  await mkdir(existingDirectory);
+  let copyAttempted = false;
+  let removalAttempted = false;
+  const fileSystem = {
+    ...oracleFileSystem,
+    mkdtemp: (): Promise<string> => Promise.resolve(existingDirectory),
+    copyFile: (): Promise<void> => {
+      copyAttempted = true;
+      return Promise.reject(new Error("copy must not run"));
+    },
+    rm: (): Promise<void> => {
+      removalAttempted = true;
+      return Promise.resolve();
+    },
+  };
+  const oracle = await OracleLifecycle.create({
+    paths,
+    caseId: "F01",
+    workspacePath: workspace.workspacePath,
+    fileSystem,
+  });
+  try {
+    oracle.markAgentClosed();
+    await assert.rejects(oracle.mountOracle(), (error: unknown) =>
+      error instanceof FileLifecycleError && error.code === "UNSAFE_FILESYSTEM_INPUT");
+    assert.equal(copyAttempted, false);
+    assert.equal(removalAttempted, false);
+    await access(existingDirectory);
+  } finally {
+    await oracle.cleanup();
+    await workspace.cleanup();
+  }
+});
+
+test("removes a raw allocated root when realpath fails after allocation", async () => {
+  const project = await createTempProject();
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  let allocatedRoot: string | undefined;
+  const fileSystem = {
+    ...oracleFileSystem,
+    mkdtemp: async (prefix: string): Promise<string> => {
+      allocatedRoot = await oracleFileSystem.mkdtemp(prefix);
+      return allocatedRoot;
+    },
+    realpath: async (path: string): Promise<string> => {
+      if (path === allocatedRoot) throw new Error("forced oracle realpath failure");
+      return oracleFileSystem.realpath(path);
+    },
+  };
+  const oracle = await OracleLifecycle.create({
+    paths,
+    caseId: "F01",
+    workspacePath: workspace.workspacePath,
+    fileSystem,
+  });
+  try {
+    oracle.markAgentClosed();
+    await assert.rejects(oracle.mountOracle(), (error: unknown) =>
+      error instanceof FileLifecycleError && error.message.includes("forced oracle realpath failure"));
+    assert.equal(oracle.state, "agent_closed");
+    assert.ok(allocatedRoot);
+    await assert.rejects(access(allocatedRoot), { code: "ENOENT" });
+  } finally {
+    await oracle.cleanup();
+    await workspace.cleanup();
+  }
+});
+
+test("recovers retained roots before a mount retry after copy and cleanup failures", async () => {
+  const project = await createTempProject();
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const roots: string[] = [];
+  let failCopy = true;
+  let failCleanup = true;
+  const fileSystem = {
+    ...oracleFileSystem,
+    mkdtemp: async (prefix: string): Promise<string> => {
+      const root = await oracleFileSystem.mkdtemp(prefix);
+      roots.push(root);
+      return root;
+    },
+    copyFile: (source: string, destination: string, mode?: number): Promise<void> => {
+      if (failCopy) return Promise.reject(new Error("forced copy failure"));
+      return oracleFileSystem.copyFile(source, destination, mode);
+    },
+    rm: async (path: string, options: { recursive: true; force: true }): Promise<void> => {
+      if (failCleanup) throw new Error("forced cleanup failure");
+      await oracleFileSystem.rm(path, options);
+    },
+  };
+  const oracle = await OracleLifecycle.create({
+    paths,
+    caseId: "F01",
+    workspacePath: workspace.workspacePath,
+    fileSystem,
+  });
+  try {
+    oracle.markAgentClosed();
+    await assert.rejects(oracle.mountOracle(), (error: unknown) =>
+      error instanceof FileLifecycleError &&
+        error.message.includes("forced copy failure") &&
+        error.cleanupFailure instanceof Error &&
+        error.cleanupFailure.message === "forced cleanup failure");
+    assert.equal(oracle.state, "agent_closed");
+    assert.equal(roots.length, 1);
+    const firstRoot = roots[0];
+    assert.ok(firstRoot);
+    await access(firstRoot);
+
+    failCopy = false;
+    failCleanup = false;
+    const mounted = await oracle.mountOracle();
+    assert.equal(roots.length, 2);
+    await assert.rejects(access(firstRoot), { code: "ENOENT" });
+    await oracle.cleanup();
+    await assert.rejects(access(mounted.gradingPath), { code: "ENOENT" });
+  } finally {
+    failCleanup = false;
+    await oracle.cleanup();
+    await workspace.cleanup();
+  }
+});
+
+test("serializes concurrent mounts so every allocated root remains removable", async () => {
+  const project = await createTempProject();
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const roots: string[] = [];
+  const fileSystem = {
+    ...oracleFileSystem,
+    mkdtemp: async (prefix: string): Promise<string> => {
+      const root = await oracleFileSystem.mkdtemp(prefix);
+      roots.push(root);
+      return root;
+    },
+  };
+  const oracle = await OracleLifecycle.create({
+    paths,
+    caseId: "F01",
+    workspacePath: workspace.workspacePath,
+    fileSystem,
+  });
+  try {
+    oracle.markAgentClosed();
+    const outcomes = await Promise.allSettled([oracle.mountOracle(), oracle.mountOracle()]);
+    assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+    assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+    assert.equal(roots.length, 1);
+    const root = roots[0];
+    assert.ok(root);
+    await oracle.cleanup();
+    await assert.rejects(access(root), { code: "ENOENT" });
   } finally {
     await oracle.cleanup();
     await workspace.cleanup();

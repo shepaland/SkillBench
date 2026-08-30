@@ -1,6 +1,6 @@
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
 import {
   copySafeTree,
@@ -35,9 +35,12 @@ export interface CreateOracleLifecycleInput {
 
 export const oracleFileSystem: OracleFileSystem = { ...safeTreeFileSystem, mkdtemp, realpath };
 
+const oracleRootPrefix = "skillbench-oracle-";
+
 export class OracleLifecycle {
   private currentState: OracleLifecycleState = "agent_active";
   private oracleRootPath: string | undefined;
+  private mutationTail: Promise<void> = Promise.resolve();
 
   private constructor(
     private readonly paths: ProjectPaths,
@@ -82,42 +85,76 @@ export class OracleLifecycle {
   }
 
   public async mountOracle(): Promise<MountedOracle> {
+    return this.serialize(() => this.mountOracleInternal());
+  }
+
+  public async cleanup(): Promise<void> {
+    return this.serialize(() => this.cleanupInternal());
+  }
+
+  private async mountOracleInternal(): Promise<MountedOracle> {
     this.requireState("mountOracle", "agent_closed");
 
     const source = await this.resolveOracleSource();
-    let safeAllocatedRoot: string | undefined;
     try {
-      const allocatedRoot = await this.fileSystem.mkdtemp(join(this.tempParent, "skillbench-oracle-"));
-      const oracleRootPath = await this.fileSystem.realpath(allocatedRoot);
-      this.assertRootIsIsolated(oracleRootPath);
-      this.oracleRootPath = oracleRootPath;
-      safeAllocatedRoot = oracleRootPath;
+      await this.removeOwnedRoot();
+      const oracleRootPath = await this.allocateOwnedRoot();
 
       const gradingPath = join(oracleRootPath, "grading");
       await copySafeTree(source, gradingPath, this.fileSystem);
       this.currentState = "oracle_mounted";
       return Object.freeze({ gradingPath });
     } catch (cause: unknown) {
-      return this.handleMountFailure(cause, safeAllocatedRoot);
+      return this.handleMountFailure(cause);
     }
   }
 
-  public async cleanup(): Promise<void> {
+  private async cleanupInternal(): Promise<void> {
     if (this.currentState === "cleaned") return;
 
-    if (this.oracleRootPath !== undefined) {
-      try {
-        await this.fileSystem.rm(this.oracleRootPath, { recursive: true, force: true });
-      } catch (cause: unknown) {
-        throw new FileLifecycleError(
-          "CLEANUP_FAILURE",
-          `oracle cleanup failed: ${errorMessage(cause)}`,
-          { cause },
-        );
-      }
-      this.oracleRootPath = undefined;
+    try {
+      await this.removeOwnedRoot();
+    } catch (cause: unknown) {
+      throw new FileLifecycleError(
+        "CLEANUP_FAILURE",
+        `oracle cleanup failed: ${errorMessage(cause)}`,
+        { cause },
+      );
     }
     this.currentState = "cleaned";
+  }
+
+  private async allocateOwnedRoot(): Promise<string> {
+    const rawRootPath = await this.fileSystem.mkdtemp(join(this.tempParent, oracleRootPrefix));
+    await this.assertOwnedRawRoot(rawRootPath);
+    this.oracleRootPath = rawRootPath;
+
+    const oracleRootPath = await this.fileSystem.realpath(rawRootPath);
+    if (oracleRootPath !== rawRootPath) {
+      throw new FileLifecycleError(
+        "UNSAFE_FILESYSTEM_INPUT",
+        `oracle root is not canonical: ${rawRootPath}`,
+      );
+    }
+    this.assertRootIsIsolated(oracleRootPath);
+    return oracleRootPath;
+  }
+
+  private async assertOwnedRawRoot(rawRootPath: string): Promise<void> {
+    if (dirname(rawRootPath) !== this.tempParent || !basename(rawRootPath).startsWith(oracleRootPrefix)) {
+      throw new FileLifecycleError(
+        "UNSAFE_FILESYSTEM_INPUT",
+        `oracle allocator returned an unsafe root: ${rawRootPath}`,
+      );
+    }
+
+    const entry = await this.fileSystem.lstat(rawRootPath);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new FileLifecycleError(
+        "UNSAFE_FILESYSTEM_INPUT",
+        `oracle allocator returned a non-directory root: ${rawRootPath}`,
+      );
+    }
   }
 
   private async resolveOracleSource(): Promise<string> {
@@ -149,23 +186,34 @@ export class OracleLifecycle {
     }
   }
 
-  private async handleMountFailure(cause: unknown, allocatedRoot: string | undefined): Promise<never> {
-    if (this.oracleRootPath !== undefined) {
-      try {
-        await this.fileSystem.rm(this.oracleRootPath, { recursive: true, force: true });
-        this.oracleRootPath = undefined;
-      } catch (cleanupFailure: unknown) {
-        throw this.mountFailure(cause, cleanupFailure);
-      }
-    } else if (allocatedRoot !== undefined) {
-      try {
-        await this.fileSystem.rm(allocatedRoot, { recursive: true, force: true });
-      } catch (cleanupFailure: unknown) {
-        throw this.mountFailure(cause, cleanupFailure);
-      }
+  private async handleMountFailure(cause: unknown): Promise<never> {
+    try {
+      await this.removeOwnedRoot();
+    } catch (cleanupFailure: unknown) {
+      throw this.mountFailure(cause, cleanupFailure);
     }
 
     throw this.mountFailure(cause);
+  }
+
+  private async removeOwnedRoot(): Promise<void> {
+    if (this.oracleRootPath === undefined) return;
+    await this.fileSystem.rm(this.oracleRootPath, { recursive: true, force: true });
+    this.oracleRootPath = undefined;
+  }
+
+  private async serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationTail;
+    let release: (() => void) | undefined;
+    this.mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
   }
 
   private mountFailure(cause: unknown, cleanupFailure?: unknown): FileLifecycleError {
