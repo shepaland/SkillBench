@@ -213,6 +213,15 @@ test("variant schemas allow empty installs for every valid variant identifier", 
   }
 });
 
+test("variant schemas allow an install with an empty destinations record", () => {
+  const manifest = {
+    ...validVariant(),
+    installs: [{ source: "skills/example", destinations: {} }],
+  };
+
+  assert.deepEqual(validator.validateVariant(manifest), manifest);
+});
+
 test("variant schemas reject unsafe environment keys, paths, and nested extras", () => {
   assert.throws(
     () => validator.validateVariant({ ...validVariant(), environment: { PATH: "/tmp/bin" } }),
