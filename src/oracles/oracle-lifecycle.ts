@@ -127,6 +127,7 @@ export class OracleLifecycle {
   private async allocateOwnedRoot(): Promise<string> {
     const rawRootPath = await this.fileSystem.mkdtemp(join(this.tempParent, oracleRootPrefix));
     await this.assertOwnedRawRoot(rawRootPath);
+    this.assertRootIsIsolated(rawRootPath);
     this.oracleRootPath = rawRootPath;
 
     const oracleRootPath = await this.fileSystem.realpath(rawRootPath);

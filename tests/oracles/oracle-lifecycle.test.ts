@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, readFile, rm, symlink } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
@@ -440,6 +440,47 @@ test("serializes concurrent mounts so every allocated root remains removable", a
   } finally {
     await oracle.cleanup();
     await workspace.cleanup();
+  }
+});
+
+test("rejects an overlapping canonical allocator root before adopting or removing it", async () => {
+  const project = await createTempProject();
+  const paths = await ProjectPaths.create(project.root);
+  const sharedTempParent = await oracleFileSystem.realpath(tmpdir());
+  const overlappingRoot = await mkdtemp(join(sharedTempParent, "skillbench-oracle-overlap-"));
+  const workspacePath = join(overlappingRoot, "workspace");
+  await mkdir(workspacePath);
+  let copyAttempted = false;
+  let removalAttempted = false;
+  const fileSystem = {
+    ...oracleFileSystem,
+    mkdtemp: (): Promise<string> => Promise.resolve(overlappingRoot),
+    copyFile: (): Promise<void> => {
+      copyAttempted = true;
+      return Promise.reject(new Error("copy must not run"));
+    },
+    rm: (): Promise<void> => {
+      removalAttempted = true;
+      return Promise.resolve();
+    },
+  };
+  const oracle = await OracleLifecycle.create({
+    paths,
+    caseId: "F01",
+    workspacePath,
+    tempParent: sharedTempParent,
+    fileSystem,
+  });
+  try {
+    oracle.markAgentClosed();
+    await assert.rejects(oracle.mountOracle(), (error: unknown) =>
+      error instanceof FileLifecycleError && error.code === "UNSAFE_FILESYSTEM_INPUT");
+    assert.equal(copyAttempted, false);
+    assert.equal(removalAttempted, false);
+    await access(workspacePath);
+  } finally {
+    await oracle.cleanup();
+    await rm(overlappingRoot, { recursive: true, force: true });
   }
 });
 
