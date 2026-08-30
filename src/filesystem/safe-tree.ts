@@ -1,6 +1,6 @@
 import { copyFile, lstat, mkdir, readdir, rm } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
 
 export interface SafeTreeFileSystem {
@@ -25,6 +25,41 @@ export async function copySafeTree(
 ): Promise<readonly string[]> {
   const created: string[] = [];
   await copyEntry(source, destination, "", created, fileSystem);
+  return created;
+}
+
+export async function createAbsentParents(
+  root: string,
+  destination: string,
+  fileSystem: SafeTreeFileSystem = safeTreeFileSystem,
+): Promise<readonly string[]> {
+  const parentDirectory = dirname(relative(root, destination));
+  if (parentDirectory === ".." || parentDirectory.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(parentDirectory)) {
+    throw new FileLifecycleError(
+      "UNSAFE_FILESYSTEM_INPUT",
+      `destination is outside its root: ${destination}`,
+    );
+  }
+
+  const created: string[] = [];
+  let candidate = root;
+  for (const segment of parentDirectory.split(/[\\/]/u)) {
+    if (segment === "" || segment === ".") continue;
+    candidate = join(candidate, segment);
+    try {
+      const status = await fileSystem.lstat(candidate);
+      if (status.isSymbolicLink() || !status.isDirectory()) {
+        throw new FileLifecycleError(
+          "UNSAFE_FILESYSTEM_INPUT",
+          `destination parent is not a safe directory: ${candidate}`,
+        );
+      }
+    } catch (error: unknown) {
+      if (!isMissingPath(error)) throw error;
+      await fileSystem.mkdir(candidate);
+      created.push(candidate);
+    }
+  }
   return created;
 }
 
@@ -71,4 +106,8 @@ export async function rollbackCreatedPaths(
   for (const path of [...created].sort((left, right) => right.length - left.length)) {
     await fileSystem.rm(path, { recursive: true, force: true });
   }
+}
+
+function isMissingPath(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
