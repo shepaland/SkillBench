@@ -8,9 +8,9 @@
 
 SkillBench is a command-line tool for checking coding-agent benchmark data. A coding agent is a program that reads a programming task and changes project files. A benchmark gives the same task to several agent setups and records which setup solves it. An agent setup is called a variant. A skill is a set of instructions that changes how the agent works. A variant can use a skill such as Superpowers or run without an extra skill as a control.
 
-The current version contains the Stage 1 foundation. It validates benchmark descriptions and their related files before any agent starts working. This catches broken links, unsafe paths, changed source files, and malformed JSON early.
+The current version includes the completed Stage 1 foundation. It validates benchmark descriptions and their related files before any agent starts working. This catches broken links, unsafe paths, changed source files, and malformed JSON early.
 
-Stage 1 does not run coding agents or calculate scores yet.
+Stage 2A also provides internal file-lifecycle building blocks. Library callers can copy a fixture into an isolated temporary workspace, install a validated variant from its manifest, and copy a private oracle into a separate grading area only after marking the agent session closed. The command-line interface still validates catalogs only; it does not run agents or oracle checks yet.
 
 ### Long-term goal and metrics
 
@@ -32,7 +32,7 @@ The main result is the solve rate. A run counts as solved only when every critic
 | `human_interventions` | How many unplanned user messages were needed during completed runs. | `unplanned_user_turns / completed_runs` |
 | `spec_drift` | How often the saved specification, which records the final requirements, contradicts approved requirements. | `contradictory_durable_spec_assertions / durable_spec_assertions` |
 
-If a formula has no valid denominator, SkillBench reports `not_applicable` instead of `0`. Version 1 will show every metric separately and will not combine them into one leaderboard score. Stage 1 prepares and validates the input data; metric calculation belongs to later stages.
+If a formula has no valid denominator, SkillBench reports `not_applicable` instead of `0`. Version 1 will show every metric separately and will not combine them into one leaderboard score. Stages 1 and 2A prepare and validate the input data; metric calculation belongs to later stages.
 
 ### Main terms
 
@@ -145,21 +145,22 @@ Catalog problems are written to the separate error stream (`stderr`) in this for
 | --- | --- | --- |
 | `npm ci` | `node_modules/` | Local dependencies. Git ignores this directory. |
 | `npm run build` | `dist/` | Compiled JavaScript for the CLI, source modules, and tests. Git ignores this directory. |
-| `npm run check` | Temporary test directories in the operating system's temporary folder | The command does not create benchmark result files in the repository. |
+| `npm run check` | Temporary test directories in the operating system's temporary folder | Stage 2A tests create isolated workspace and grading directories only under the operating system temporary directory and clean them afterward. The command does not create benchmark result files in the repository. |
 | `skillbench validate` | None | Validation only reads files, prints messages, and returns an exit code. |
 
-Stage 1 does not create `result.json`, run transcripts, comparisons, scores, or Markdown reports. Those artifacts belong to later delivery stages.
+Stage 2A does not create `result.json`, run transcripts, comparisons, scores, or Markdown reports. Those artifacts belong to later delivery stages.
 
 ### Current limitations
 
 - Only `validate` is available. `list`, `dry-run`, `run`, `compare`, and `report` return exit code `2`.
-- Stage 1 does not start Codex or another coding agent.
-- Stage 1 does not execute private oracle checks. It only verifies that each required oracle directory exists, is not empty, and can be hashed.
+- Stage 2A file-lifecycle primitives are available to library callers only. The command-line interface does not start Codex or another coding agent, or execute private oracle checks.
+- Stage 2B will add run orchestration, frozen inputs, normalized results, and an operational `dry-run` command.
+- Validation only verifies that each required oracle directory exists, is not empty, and can be hashed.
 - Case and variant manifests are discovered only one directory below `cases/` and `variants/`.
 - `--public-only` skips private oracle availability checks. All schema, reference, hash, and path checks still run.
 - Catalog paths reject traversal and symbolic links. Another local process can still replace a checked path between validation and later use.
 - Immutable JSON storage protects writes that happen one after another. Two local processes writing the same record at the same time can conflict because the standard `rename` operation on macOS and Linux can replace an existing file.
-- The repository currently provides the validation framework and test fixtures. The twelve-case public benchmark suite, real Codex adapter, scoring, comparisons, and reports are planned for later stages.
+- The repository currently provides catalog validation, internal file-lifecycle primitives, and test fixtures. The twelve-case public benchmark suite, real Codex adapter, scoring, comparisons, and reports are planned for later stages.
 
 ## Русский
 
@@ -167,9 +168,9 @@ Stage 1 does not create `result.json`, run transcripts, comparisons, scores, or 
 
 SkillBench проверяет данные для тестирования кодовых агентов через командную строку. Кодовый агент читает задачу по программированию и меняет файлы проекта. Бенчмарк даёт одну задачу нескольким конфигурациям агента и записывает, какая конфигурация справилась. Такая конфигурация называется вариантом. Скилл содержит инструкции, которые меняют работу агента. Вариант может использовать скилл, например Superpowers, или работать без дополнительного скилла как контрольная группа.
 
-Текущая версия содержит основу первого этапа. Она проверяет описание бенчмарка и связанные файлы до запуска агента. Проверка заранее находит сломанные ссылки, опасные пути, изменившиеся исходные файлы и ошибки в JSON.
+Текущая версия включает завершённую основу первого этапа. Она проверяет описание бенчмарка и связанные файлы до запуска агента. Проверка заранее находит сломанные ссылки, опасные пути, изменившиеся исходные файлы и ошибки в JSON.
 
-Первый этап пока не запускает кодовых агентов и не считает результаты.
+Этап 2A также добавляет внутренние средства для безопасной работы с файлами. Пользователь библиотеки может скопировать фикстуру в изолированный временный каталог, установить проверенный вариант по его манифесту и скопировать закрытый оракул в отдельный каталог проверки только после явного закрытия сессии агента. Командная строка пока только проверяет каталоги: она ещё не запускает агентов и проверки оракула.
 
 ### Конечная цель и метрики
 
@@ -191,7 +192,7 @@ SkillBench проверяет данные для тестирования ко�
 | `human_interventions` | Сколько незапланированных сообщений пользователя понадобилось во время завершённых запусков. | `unplanned_user_turns / completed_runs` |
 | `spec_drift` | Как часто сохранённая спецификация с итоговыми требованиями противоречит утверждённым требованиям. | `contradictory_durable_spec_assertions / durable_spec_assertions` |
 
-Если в формуле нет подходящего знаменателя, SkillBench записывает `not_applicable` вместо `0`. Версия 1 покажет каждую метрику отдельно и не будет объединять их в один рейтинг. Первый этап готовит и проверяет исходные данные, расчёт метрик появится на следующих этапах.
+Если в формуле нет подходящего знаменателя, SkillBench записывает `not_applicable` вместо `0`. Версия 1 покажет каждую метрику отдельно и не будет объединять их в один рейтинг. Первый этап и этап 2A готовят и проверяют исходные данные, расчёт метрик появится на следующих этапах.
 
 ### Основные термины
 
@@ -304,18 +305,19 @@ Validated 0 cases and 0 variants.
 | --- | --- | --- |
 | `npm ci` | `node_modules/` | Локальные зависимости. Git игнорирует этот каталог. |
 | `npm run build` | `dist/` | Собранные JavaScript-файлы CLI, исходных модулей и тестов. Git игнорирует этот каталог. |
-| `npm run check` | Временные каталоги в системной папке для временных файлов | Команда не создаёт результаты бенчмарка в репозитории. |
+| `npm run check` | Временные каталоги в системной папке для временных файлов | Тесты этапа 2A создают изолированные рабочие каталоги и каталоги проверки только в системной папке для временных файлов и удаляют их после работы. Команда не создаёт результаты бенчмарка в репозитории. |
 | `skillbench validate` | Нет | Проверка только читает файлы, выводит сообщения и возвращает код завершения. |
 
-Первый этап не создаёт `result.json`, записи диалогов, сравнения, оценки или отчёты Markdown. Эти файлы появятся на следующих этапах разработки.
+Этап 2A не создаёт `result.json`, записи диалогов, сравнения, оценки или отчёты Markdown. Эти файлы появятся на следующих этапах разработки.
 
 ### Текущие ограничения
 
 - Сейчас доступна только команда `validate`. Команды `list`, `dry-run`, `run`, `compare` и `report` возвращают код `2`.
-- Первый этап не запускает Codex или другого кодового агента.
-- Первый этап не запускает закрытые проверки оракула. Он проверяет, что нужный каталог существует, содержит файлы и для него можно рассчитать хеш.
+- Внутренние средства этапа 2A для работы с файлами доступны только пользователям библиотеки. Командная строка не запускает Codex или другого кодового агента и не выполняет закрытые проверки оракула.
+- Этап 2B добавит оркестрацию запусков, зафиксированные входные данные, нормализованные результаты и рабочую команду `dry-run`.
+- Проверка только убеждается, что нужный каталог оракула существует, содержит файлы и для него можно рассчитать хеш.
 - SkillBench ищет манифесты кейсов и вариантов только на один уровень ниже каталогов `cases/` и `variants/`.
 - Флаг `--public-only` отключает проверку наличия закрытых оракулов. Проверки схем, ссылок, хешей и путей продолжают работать.
 - Пути каталога защищены от перехода в родительские каталоги и символических ссылок. Другая локальная программа всё ещё может заменить уже проверенный путь до его дальнейшего использования.
 - Хранилище неизменяемых JSON-файлов защищает записи, которые идут по очереди. Две локальные программы могут одновременно записывать один файл, потому что стандартная операция `rename` в macOS и Linux заменяет существующий файл.
-- Репозиторий пока содержит средство проверки и тестовые фикстуры. Набор из двенадцати публичных кейсов, настоящий адаптер Codex, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
+- Репозиторий пока содержит проверку каталога, внутренние средства для работы с файлами и тестовые фикстуры. Набор из двенадцати публичных кейсов, настоящий адаптер Codex, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
