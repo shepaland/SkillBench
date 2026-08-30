@@ -20,3 +20,20 @@ test("help publishes the version 1 commands", () => {
 test("an invalid invocation returns exit code 2", async () => {
   assert.equal(await main(["node", "skillbench", "unknown-command"]), 2);
 });
+
+test("an invalid invocation renders its error only once", async (t) => {
+  const output: string[] = [];
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  t.after(() => {
+    process.stderr.write = originalWrite;
+  });
+  process.stderr.write = ((value: string | Uint8Array) => {
+    output.push(value.toString());
+    return true;
+  }) as typeof process.stderr.write;
+
+  assert.equal(await main(["node", "skillbench", "unknown-command"]), 2);
+  assert.deepEqual(output.join("").match(/error: unknown command 'unknown-command'/g), [
+    "error: unknown command 'unknown-command'",
+  ]);
+});

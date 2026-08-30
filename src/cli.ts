@@ -21,7 +21,6 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0;
       }
 
-      process.stderr.write(`${error.message}\n`);
       return 2;
     }
 
