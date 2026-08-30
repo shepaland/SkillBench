@@ -41,6 +41,7 @@ export interface RunResult {
     readonly runtimeVersion: string;
     readonly adapterVersion: string;
   };
+  readonly cleanupFailures: readonly string[];
 }
 
 export class RunEvidenceWriter {

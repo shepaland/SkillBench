@@ -76,6 +76,7 @@ test("writes transcript, changes, and result as separate records", async () => {
     changePathObservations: { outsideAllowed: [], insideForbidden: [] },
     costs: { inputTokens: 10, outputTokens: 20, wallClockMs: 30, unplannedUserTurns: 0 },
     adapter: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+    cleanupFailures: [],
   };
 
   await writer.writeTranscript({
@@ -108,6 +109,7 @@ test("detects a failed critical assertion and ignores a failed non-critical one"
     changePathObservations: { outsideAllowed: [], insideForbidden: [] },
     costs: { inputTokens: null, outputTokens: null, wallClockMs: 0, unplannedUserTurns: 0 },
     adapter: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+    cleanupFailures: [],
   };
 
   assert.equal(

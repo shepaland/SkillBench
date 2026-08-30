@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { access, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { loadCatalog, type CatalogCase, type CatalogVariant } from "../../src/catalog/load-catalog.js";
@@ -73,6 +74,7 @@ test("a successful run writes every evidence file and reports completed", async 
   assert.deepEqual(result.changes, { added: [], modified: [], removed: [] });
   assert.equal(result.costs.unplannedUserTurns, 0);
   assert.equal(result.adapter.runtime, "fake");
+  assert.deepEqual(result.cleanupFailures, []);
 
   const directory = join(harness.project.root, "runs/F01/example/20260830T175302Z-a1b2c3");
   for (const filename of ["manifest.json", "transcript.json", "changes.json", "result.json"]) {
@@ -124,6 +126,23 @@ test("an exhausted adapter reports exhausted and still grades", async () => {
 
   assert.equal(result.status, "exhausted");
   assert.equal(result.assertions.length, 1);
+});
+
+test("a process killed by a signal reports exhausted even without a timeout flag", async () => {
+  const harness = await createHarness();
+  const killedAdapter = {
+    execute: () => Promise.resolve({
+      events: [{ type: "session_started" as const, atMs: 0 }, { type: "session_closed" as const, atMs: 1 }],
+      process: { exitCode: null, signal: "SIGKILL" as NodeJS.Signals, timedOut: false },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      elapsedMs: 1,
+      metadata: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+    }),
+  };
+
+  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2ca", { adapter: killedAdapter }));
+
+  assert.equal(result.status, "exhausted");
 });
 
 test("an adapter failure reports errored at the execute step", async () => {
@@ -234,3 +253,52 @@ test("the variant material is installed before the baseline snapshot", async () 
   assert.equal(installedDuringSession, true);
   assert.deepEqual(result.changes.added, []);
 });
+
+test("the mounted grading area is gone after a successful run", async () => {
+  const harness = await createHarness();
+  const tempParent = await mkdtemp(join(tmpdir(), "skillbench-execute-run-test-"));
+
+  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2d3", { tempParent }));
+
+  assert.equal(result.status, "completed");
+  const leftovers = await readdir(tempParent);
+  assert.deepEqual(
+    leftovers.filter((entry) => entry.startsWith("skillbench-oracle-")),
+    [],
+  );
+});
+
+test("a workspace preserved by keepWorkspace carries no private oracle content", async () => {
+  const harness = await createHarness();
+  let workspacePath = "";
+  const capturingAdapter = {
+    execute: (input: { workspace: string }) => {
+      workspacePath = input.workspace;
+      return Promise.resolve({
+        events: [{ type: "session_started" as const, atMs: 0 }, { type: "session_closed" as const, atMs: 1 }],
+        process: { exitCode: 0, signal: null, timedOut: false },
+        usage: null,
+        elapsedMs: 1,
+        metadata: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+      });
+    },
+  };
+
+  await executeRun(runInput(harness, "20260830T175302Z-a1b2d4", { adapter: capturingAdapter, keepWorkspace: true }));
+
+  assert.notEqual(workspacePath, "");
+  const names = await collectEntryNames(workspacePath);
+  assert.deepEqual(names.filter((name) => name === "oracle.json" || name === "checks"), []);
+});
+
+async function collectEntryNames(root: string): Promise<string[]> {
+  const names: string[] = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    names.push(entry.name);
+    if (entry.isDirectory()) {
+      names.push(...await collectEntryNames(join(root, entry.name)));
+    }
+  }
+  return names;
+}

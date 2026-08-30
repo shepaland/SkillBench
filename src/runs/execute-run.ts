@@ -66,6 +66,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   let status: RunStatus = "completed";
   let failedStep: PipelineStep | null = null;
   let failureMessage = "";
+  const cleanupFailures: string[] = [];
 
   try {
     workspace = await materializeWorkspace({
@@ -133,9 +134,11 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     failedStep = step;
     failureMessage = errorMessage(error);
   } finally {
-    await cleanupQuietly(lifecycle);
+    const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
+    if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
     if (input.keepWorkspace !== true) {
-      await cleanupQuietly(workspace);
+      const workspaceFailure = await cleanupQuietly(workspace, "workspace");
+      if (workspaceFailure !== undefined) cleanupFailures.push(workspaceFailure);
     }
   }
 
@@ -160,6 +163,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       runtimeVersion: execution?.metadata.runtimeVersion ?? input.configuration.runtimeVersion,
       adapterVersion: execution?.metadata.adapterVersion ?? input.configuration.adapterVersion,
     }),
+    cleanupFailures: Object.freeze(cleanupFailures),
   });
 
   await writer.writeResult(result);
@@ -168,6 +172,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
 
 function isExhausted(execution: RuntimeExecution, limits: RuntimeLimits): boolean {
   if (execution.process.timedOut) return true;
+  if (execution.process.signal !== null) return true;
   if (execution.elapsedMs >= limits.wallClockMs) return true;
   if (execution.usage !== null &&
     execution.usage.inputTokens + execution.usage.outputTokens >= limits.tokenLimit) {
@@ -195,12 +200,17 @@ function countUnplannedUserTurns(
   return execution.events.filter((event) => event.type === "prompt_sent" && !declared.has(event.stepId)).length;
 }
 
-async function cleanupQuietly(target: { cleanup(): Promise<void> } | undefined): Promise<void> {
-  if (target === undefined) return;
+async function cleanupQuietly(
+  target: { cleanup(): Promise<void> } | undefined,
+  label: string,
+): Promise<string | undefined> {
+  if (target === undefined) return undefined;
   try {
     await target.cleanup();
-  } catch {
-    // Cleanup failure must not replace the recorded run outcome.
+    return undefined;
+  } catch (error: unknown) {
+    // Cleanup failure must not replace the recorded run outcome, but it must be recorded.
+    return `${label}: ${errorMessage(error)}`;
   }
 }
 
