@@ -180,7 +180,9 @@ Validated 0 cases and 0 variants.
 | --- | --- |
 | `0` | The command finished and everything it checked passed. |
 | `1` | The command finished and found problems with what it checked. `validate` found catalog problems; `run` finished without solving the case, either because a critical check failed or because the agent ran out of its limits. |
-| `2` | The command could not do its work: the command line was wrong, an unknown case or variant was given, a dependency was missing or broken (such as the private oracle), or a run failed because the tool itself broke. |
+| `2` | The command could not do its work: the command line was wrong, an unknown case or variant was given, a dependency was missing or broken (such as the private oracle), a run failed because the tool itself broke, or a run left temporary oracle material behind. |
+
+Code `2` wins over code `1`. If a run both failed to solve the case and left oracle material behind, the command reports `2`, because leftover private material matters more than a benchmark result. The per-run lines still name every check that failed.
 
 Catalog problems are written to the separate error stream (`stderr`) in this format:
 
@@ -393,7 +395,9 @@ Validated 0 cases and 0 variants.
 | --- | --- |
 | `0` | Команда завершилась, и всё, что она проверяла, прошло успешно. |
 | `1` | Команда завершилась и нашла проблемы в том, что проверяла. `validate` нашла проблемы в каталоге; `run` завершился, не решив задачу, — либо провалилась критическая проверка, либо агент исчерпал свои лимиты. |
-| `2` | Команда не смогла выполнить свою работу: неверная командная строка, неизвестный кейс или вариант, отсутствующая или сломанная зависимость (например, закрытый оракул), либо запуск, который прервался из-за поломки самого инструмента. |
+| `2` | Команда не смогла выполнить свою работу: неверная командная строка, неизвестный кейс или вариант, отсутствующая или сломанная зависимость (например, закрытый оракул), запуск, который прервался из-за поломки самого инструмента, либо запуск, оставивший после себя временные файлы оракула. |
+
+Код `2` важнее кода `1`. Если запуск и не решил задачу, и оставил после себя файлы оракула, команда сообщает `2`: незачищенный закрытый материал важнее результата замера. Построчный отчёт по запускам всё равно называет каждую провалившуюся проверку.
 
 Проблемы каталога выводятся в отдельный поток ошибок (`stderr`) в таком формате:
 
