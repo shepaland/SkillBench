@@ -8,9 +8,9 @@
 
 SkillBench is a command-line tool for checking coding-agent benchmark data. A coding agent is a program that reads a programming task and changes project files. A benchmark gives the same task to several agent setups and records which setup solves it. An agent setup is called a variant. A skill is a set of instructions that changes how the agent works. A variant can use a skill such as Superpowers or run without an extra skill as a control.
 
-The current version includes the completed Stage 1 foundation. It validates benchmark descriptions and their related files before any agent starts working. This catches broken links, unsafe paths, changed source files, and malformed JSON early.
+The current version has four working commands. `validate` checks a benchmark catalog for broken links, unsafe paths, changed source files, and malformed JSON before any agent starts working. `list` prints the cases and variants found in a project. `dry-run` freezes every input needed for a run — such as the case, the variant, the model, and the sandbox mode — and prints the resulting plan without copying a workspace or starting an agent. `run` executes one or more independent runs from start to finish against a deterministic built-in fake runtime.
 
-Stage 2A also provides internal file-lifecycle building blocks. Library callers can copy a fixture into an isolated temporary workspace, install a validated variant from its manifest, and copy a private oracle into a separate grading area only after marking the agent session closed. The command-line interface still validates catalogs only; it does not run agents or oracle checks yet.
+No live coding agent is connected yet. Comparing variants, calculating metrics, and generating reports are not implemented. The `compare` and `report` commands are reserved for that future work and currently return exit code `2`.
 
 ### Long-term goal and metrics
 
@@ -32,7 +32,7 @@ The main result is the solve rate. A run counts as solved only when every critic
 | `human_interventions` | How many unplanned user messages were needed during completed runs. | `unplanned_user_turns / completed_runs` |
 | `spec_drift` | How often the saved specification, which records the final requirements, contradicts approved requirements. | `contradictory_durable_spec_assertions / durable_spec_assertions` |
 
-If a formula has no valid denominator, SkillBench reports `not_applicable` instead of `0`. Version 1 will show every metric separately and will not combine them into one leaderboard score. Stages 1 and 2A prepare and validate the input data; metric calculation belongs to later stages.
+If a formula has no valid denominator, SkillBench reports `not_applicable` instead of `0`. Version 1 will show every metric separately and will not combine them into one leaderboard score. The current version prepares, validates, and executes runs; metric calculation belongs to a later stage.
 
 ### Main terms
 
@@ -61,6 +61,49 @@ The `skillbench validate` command reads the project catalog and checks:
 - private oracle availability, unless `--public-only` is used.
 
 The command prints every problem in a stable order. This makes local results and automated checks easier to compare.
+
+### `list`, `dry-run`, and `run`
+
+`list` prints the cases and variants defined in a project. Add `--json` to get the same information as a JSON document for scripts.
+
+```sh
+node dist/src/cli.js list --project .
+```
+
+`dry-run` freezes every input needed for one run — the case, the variant, the model, the reasoning effort, the sandbox mode, and content hashes — and prints the resulting plan. It does not copy a workspace or start an agent.
+
+```sh
+node dist/src/cli.js dry-run --project . --case <case-id> --variant <variant-id>
+```
+
+`run` executes one or more independent runs from start to finish: it copies the fixture into an isolated workspace, installs the variant, runs the coding agent through the deterministic fake runtime, checks the result against the private oracle, and writes the evidence to disk. `--runs` sets how many independent repetitions to execute.
+
+```sh
+node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runs 2
+```
+
+### Run evidence
+
+Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/` as four files:
+
+| File | Contents |
+| --- | --- |
+| `manifest.json` | The frozen run inputs: case, variant, model, sandbox mode, limits, and content hashes. |
+| `transcript.json` | The events, process result, and token usage reported by the runtime. |
+| `changes.json` | The files the agent added, changed, or removed, and whether any change fell outside the allowed paths. |
+| `result.json` | The run status, the outcome of each assertion, and the run's costs. |
+
+### Run statuses
+
+| Status | Meaning |
+| --- | --- |
+| `completed` | The run finished normally. |
+| `exhausted` | The agent hit a limit, such as the wall-clock time or token limit. Later metrics will count this as an unsolved run. |
+| `errored` | The tool itself failed, for example while copying files. Later metrics will exclude this run instead of counting it as unsolved. |
+
+### Private oracle manifest
+
+Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the assertions declared in the case — no assertion left without a check, and no check for an assertion the case does not declare.
 
 ### Requirements
 
@@ -145,22 +188,26 @@ Catalog problems are written to the separate error stream (`stderr`) in this for
 | --- | --- | --- |
 | `npm ci` | `node_modules/` | Local dependencies. Git ignores this directory. |
 | `npm run build` | `dist/` | Compiled JavaScript for the CLI, source modules, and tests. Git ignores this directory. |
-| `npm run check` | Temporary test directories in the operating system's temporary folder | Stage 2A tests create isolated workspace and grading directories only under the operating system temporary directory and clean them afterward. The command does not create benchmark result files in the repository. |
+| `npm run check` | Temporary test directories in the operating system's temporary folder | Tests create isolated workspace and grading directories only under the operating system temporary directory and clean them afterward. The command does not create benchmark result files in the repository. |
 | `skillbench validate` | None | Validation only reads files, prints messages, and returns an exit code. |
+| `skillbench list` | None | Listing only reads the catalog and prints it. |
+| `skillbench dry-run` | None | The plan is printed only; no workspace is copied and no files are written. |
+| `skillbench run` | `runs/<case-id>/<variant-id>/<run-id>/` | Each run writes its manifest, transcript, changes, and result there. Git ignores the `runs/` directory. |
 
-Stage 2A does not create `result.json`, run transcripts, comparisons, scores, or Markdown reports. Those artifacts belong to later delivery stages.
+Comparisons and Markdown reports are not implemented yet. Those artifacts belong to a later delivery stage.
 
 ### Current limitations
 
-- Only `validate` is available. `list`, `dry-run`, `run`, `compare`, and `report` return exit code `2`.
-- Stage 2A file-lifecycle primitives are available to library callers only. The command-line interface does not start Codex or another coding agent, or execute private oracle checks.
-- Stage 2B will add run orchestration, frozen inputs, normalized results, and an operational `dry-run` command.
-- Validation only verifies that each required oracle directory exists, is not empty, and can be hashed.
+- `compare` and `report` are reserved commands and return exit code `2`.
+- `run` executes against the deterministic built-in fake runtime only. No live coding agent, such as Codex, is connected yet.
+- Runs execute one after another, not in parallel.
+- The fake runtime plays back a scripted transcript and does not change any files in the workspace, so an end-to-end run exercises the pipeline rather than real agent behavior.
+- `validate` checks that each required private oracle directory exists, is not empty, can be hashed, and — unless `--public-only` is used — that its oracle manifest covers exactly the case's declared assertions.
 - Case and variant manifests are discovered only one directory below `cases/` and `variants/`.
 - `--public-only` skips private oracle availability checks. All schema, reference, hash, and path checks still run.
 - Catalog paths reject traversal and symbolic links. Another local process can still replace a checked path between validation and later use.
 - Immutable JSON storage protects writes that happen one after another. Two local processes writing the same record at the same time can conflict because the standard `rename` operation on macOS and Linux can replace an existing file.
-- The repository currently provides catalog validation, internal file-lifecycle primitives, and test fixtures. The twelve-case public benchmark suite, real Codex adapter, scoring, comparisons, and reports are planned for later stages.
+- The repository currently provides catalog validation, run orchestration against the fake runtime, and test fixtures. The twelve-case public benchmark suite, a real Codex adapter, scoring, comparisons, and reports are planned for later stages.
 
 ## Русский
 
@@ -168,9 +215,9 @@ Stage 2A does not create `result.json`, run transcripts, comparisons, scores, or
 
 SkillBench проверяет данные для тестирования кодовых агентов через командную строку. Кодовый агент читает задачу по программированию и меняет файлы проекта. Бенчмарк даёт одну задачу нескольким конфигурациям агента и записывает, какая конфигурация справилась. Такая конфигурация называется вариантом. Скилл содержит инструкции, которые меняют работу агента. Вариант может использовать скилл, например Superpowers, или работать без дополнительного скилла как контрольная группа.
 
-Текущая версия включает завершённую основу первого этапа. Она проверяет описание бенчмарка и связанные файлы до запуска агента. Проверка заранее находит сломанные ссылки, опасные пути, изменившиеся исходные файлы и ошибки в JSON.
+Текущая версия имеет четыре рабочие команды. `validate` проверяет каталог бенчмарка: ищет сломанные ссылки, опасные пути, изменившиеся исходные файлы и ошибки в JSON до запуска агента. `list` выводит список кейсов и вариантов, найденных в проекте. `dry-run` фиксирует все входные данные для запуска — например, кейс, вариант, модель и режим песочницы — и печатает получившийся план без копирования рабочего каталога и без запуска агента. `run` выполняет один или несколько независимых запусков от начала до конца на детерминированной встроенной фиктивной среде выполнения.
 
-Этап 2A также добавляет внутренние средства для безопасной работы с файлами. Пользователь библиотеки может скопировать фикстуру в изолированный временный каталог, установить проверенный вариант по его манифесту и скопировать закрытый оракул в отдельный каталог проверки только после явного закрытия сессии агента. Командная строка пока только проверяет каталоги: она ещё не запускает агентов и проверки оракула.
+Настоящий кодовый агент пока не подключён. Сравнение вариантов, расчёт метрик и создание отчётов ещё не реализованы. Команды `compare` и `report` зарезервированы под эту будущую работу и сейчас возвращают код завершения `2`.
 
 ### Конечная цель и метрики
 
@@ -192,7 +239,7 @@ SkillBench проверяет данные для тестирования ко�
 | `human_interventions` | Сколько незапланированных сообщений пользователя понадобилось во время завершённых запусков. | `unplanned_user_turns / completed_runs` |
 | `spec_drift` | Как часто сохранённая спецификация с итоговыми требованиями противоречит утверждённым требованиям. | `contradictory_durable_spec_assertions / durable_spec_assertions` |
 
-Если в формуле нет подходящего знаменателя, SkillBench записывает `not_applicable` вместо `0`. Версия 1 покажет каждую метрику отдельно и не будет объединять их в один рейтинг. Первый этап и этап 2A готовят и проверяют исходные данные, расчёт метрик появится на следующих этапах.
+Если в формуле нет подходящего знаменателя, SkillBench записывает `not_applicable` вместо `0`. Версия 1 покажет каждую метрику отдельно и не будет объединять их в один рейтинг. Текущая версия готовит, проверяет и выполняет запуски; расчёт метрик появится на следующем этапе.
 
 ### Основные термины
 
@@ -221,6 +268,49 @@ SkillBench проверяет данные для тестирования ко�
 - наличие закрытых оракулов, если не указан флаг `--public-only`.
 
 Команда выводит найденные проблемы в стабильном порядке. Поэтому локальный результат удобно сравнивать с результатом автоматической проверки.
+
+### `list`, `dry-run` и `run`
+
+`list` выводит список кейсов и вариантов, заданных в проекте. Добавьте `--json`, чтобы получить те же данные в виде JSON-документа для скриптов.
+
+```sh
+node dist/src/cli.js list --project .
+```
+
+`dry-run` фиксирует все входные данные для одного запуска — кейс, вариант, модель, уровень рассуждения, режим песочницы и хеши содержимого — и печатает получившийся план. Команда не копирует рабочий каталог и не запускает агента.
+
+```sh
+node dist/src/cli.js dry-run --project . --case <case-id> --variant <variant-id>
+```
+
+`run` выполняет один или несколько независимых запусков от начала до конца: копирует фикстуру в изолированный рабочий каталог, устанавливает вариант, запускает кодового агента через детерминированную фиктивную среду выполнения, проверяет результат по закрытому оракулу и записывает свидетельства запуска на диск. Флаг `--runs` задаёт число независимых повторов.
+
+```sh
+node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runs 2
+```
+
+### Свидетельства запуска
+
+Каждый запуск записывает свои свидетельства в каталог `runs/<case-id>/<variant-id>/<run-id>/` в виде четырёх файлов:
+
+| Файл | Содержимое |
+| --- | --- |
+| `manifest.json` | Зафиксированные входные данные запуска: кейс, вариант, модель, режим песочницы, лимиты и хеши содержимого. |
+| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения. |
+| `changes.json` | Файлы, которые агент добавил, изменил или удалил, и попало ли какое-либо изменение за пределы разрешённых путей. |
+| `result.json` | Статус запуска, результат каждой проверки-утверждения и затраты на запуск. |
+
+### Статусы запуска
+
+| Статус | Значение |
+| --- | --- |
+| `completed` | Запуск завершился обычным образом. |
+| `exhausted` | Агент упёрся в лимит, например по времени или по числу токенов. В будущих метриках такой запуск будет считаться нерешённым. |
+| `errored` | Отказал сам инструмент, например при копировании файлов. В будущих метриках такой запуск будет исключён, а не засчитан как нерешённый. |
+
+### Манифест закрытого оракула
+
+Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те утверждения, что заявлены в кейсе, — без утверждений без проверки и без проверок для незаявленных утверждений.
 
 ### Требования
 
@@ -305,19 +395,23 @@ Validated 0 cases and 0 variants.
 | --- | --- | --- |
 | `npm ci` | `node_modules/` | Локальные зависимости. Git игнорирует этот каталог. |
 | `npm run build` | `dist/` | Собранные JavaScript-файлы CLI, исходных модулей и тестов. Git игнорирует этот каталог. |
-| `npm run check` | Временные каталоги в системной папке для временных файлов | Тесты этапа 2A создают изолированные рабочие каталоги и каталоги проверки только в системной папке для временных файлов и удаляют их после работы. Команда не создаёт результаты бенчмарка в репозитории. |
+| `npm run check` | Временные каталоги в системной папке для временных файлов | Тесты создают изолированные рабочие каталоги и каталоги проверки только в системной папке для временных файлов и удаляют их после работы. Команда не создаёт результаты бенчмарка в репозитории. |
 | `skillbench validate` | Нет | Проверка только читает файлы, выводит сообщения и возвращает код завершения. |
+| `skillbench list` | Нет | Вывод списка только читает каталог и печатает его. |
+| `skillbench dry-run` | Нет | Печатается только план; рабочий каталог не копируется, файлы не записываются. |
+| `skillbench run` | `runs/<case-id>/<variant-id>/<run-id>/` | Каждый запуск записывает туда манифест, запись диалога, изменения и результат. Git игнорирует каталог `runs/`. |
 
-Этап 2A не создаёт `result.json`, записи диалогов, сравнения, оценки или отчёты Markdown. Эти файлы появятся на следующих этапах разработки.
+Сравнения и отчёты Markdown ещё не реализованы. Эти файлы появятся на следующем этапе разработки.
 
 ### Текущие ограничения
 
-- Сейчас доступна только команда `validate`. Команды `list`, `dry-run`, `run`, `compare` и `report` возвращают код `2`.
-- Внутренние средства этапа 2A для работы с файлами доступны только пользователям библиотеки. Командная строка не запускает Codex или другого кодового агента и не выполняет закрытые проверки оракула.
-- Этап 2B добавит оркестрацию запусков, зафиксированные входные данные, нормализованные результаты и рабочую команду `dry-run`.
-- Проверка только убеждается, что нужный каталог оракула существует, содержит файлы и для него можно рассчитать хеш.
+- `compare` и `report` — зарезервированные команды, они возвращают код `2`.
+- `run` выполняется только на детерминированной встроенной фиктивной среде выполнения. Настоящий кодовый агент, например Codex, пока не подключён.
+- Запуски выполняются один за другим, а не параллельно.
+- Фиктивная среда выполнения проигрывает заранее написанный сценарий и не меняет файлы в рабочем каталоге, поэтому сквозной запуск проверяет конвейер обработки, а не поведение настоящего агента.
+- `validate` проверяет, что нужный каталог закрытого оракула существует, содержит файлы и для него можно рассчитать хеш, а если не указан флаг `--public-only` — что его манифест покрывает ровно заявленные в кейсе утверждения.
 - SkillBench ищет манифесты кейсов и вариантов только на один уровень ниже каталогов `cases/` и `variants/`.
 - Флаг `--public-only` отключает проверку наличия закрытых оракулов. Проверки схем, ссылок, хешей и путей продолжают работать.
 - Пути каталога защищены от перехода в родительские каталоги и символических ссылок. Другая локальная программа всё ещё может заменить уже проверенный путь до его дальнейшего использования.
 - Хранилище неизменяемых JSON-файлов защищает записи, которые идут по очереди. Две локальные программы могут одновременно записывать один файл, потому что стандартная операция `rename` в macOS и Linux заменяет существующий файл.
-- Репозиторий пока содержит проверку каталога, внутренние средства для работы с файлами и тестовые фикстуры. Набор из двенадцати публичных кейсов, настоящий адаптер Codex, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
+- Репозиторий пока содержит проверку каталога, оркестрацию запусков на фиктивной среде выполнения и тестовые фикстуры. Набор из двенадцати публичных кейсов, настоящий адаптер Codex, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.

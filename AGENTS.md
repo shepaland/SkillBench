@@ -15,11 +15,13 @@ The primary metric is `solve_rate`. Diagnostic metrics are `correctness`, `regre
 
 ## Current State
 
-- Stage 1 and Stage 2A are complete.
-- The repository validates benchmark catalogs and provides internal primitives for isolated fixture materialization, data-driven variant installation, and post-session private-oracle mounting.
-- It does not run agents, execute oracle commands, freeze run manifests, normalize results, calculate metrics, compare variants, or generate reports.
-- `validate` is implemented. `list`, `dry-run`, `run`, `compare`, and `report` are reserved commands and currently return exit code `2`.
-- The next delivery stage is Stage 2B: run orchestration, frozen inputs, normalized results, and an operational `dry-run` command.
+- Stage 1, Stage 2A, and Stage 2B are complete.
+- `validate`, `list`, `dry-run`, and `run` are implemented. `compare` and `report` remain reserved commands and currently return exit code `2`.
+- `validate` checks the catalog and, unless `--public-only` is used, loads each case's private oracle manifest and confirms it covers exactly the declared assertions.
+- `list` prints the cases and variants in a project, with a `--json` option for machine-readable output.
+- `dry-run` freezes every input for a run and prints the execution plan without materializing a workspace or starting an agent.
+- `run` executes one or more independent runs end to end against a deterministic built-in fake runtime; no live coding agent is connected yet.
+- The next delivery stage is Stage 3: the Codex adapter and multi-step prompt execution.
 - There are no committed public cases or variants yet. Successful validation of this repository with `--public-only` reports `0` cases and `0` variants.
 
 Do not describe planned functionality as already implemented. Update this section whenever a delivery stage changes the real CLI behavior.
@@ -27,6 +29,7 @@ Do not describe planned functionality as already implemented. Update this sectio
 ## Development Record
 
 - Stage 2A development used the isolated worktree `.worktrees/stage2a-file-lifecycles` on branch `stage2a-file-lifecycles`.
+- Stage 2B development used the isolated worktree `.worktrees/stage2b-run-orchestration` on branch `stage2b-run-orchestration`.
 
 ## Technology and Commands
 
@@ -51,12 +54,13 @@ node dist/src/cli.js validate --project . --public-only
 - `src/filesystem/` contains safe tree copying, containment checks, and rollback helpers that reject symbolic-link escapes.
 - `src/workspace/` materializes isolated fixture workspaces, verifies fixture integrity, and cleans them up.
 - `src/variants/` installs validated variant material into a workspace and verifies its installed content hash.
-- `src/oracles/` controls the post-session private-oracle lifecycle and mounts an oracle in a separate grading area.
+- `src/oracles/` controls the post-session private-oracle lifecycle and mounts an oracle in a separate grading area; it additionally owns the oracle manifest and typed-command oracle execution.
+- `src/runs/` owns tree snapshots, frozen run inputs, normalized results, and the pipeline runner.
 - `src/integrity/` contains canonical JSON and content hashing.
 - `src/paths/` owns safe project-path resolution.
-- `schemas/` contains the published case and variant JSON Schemas; `src/schemas/` validates data against them.
+- `schemas/` contains the published case, variant, and oracle JSON Schemas; `src/schemas/` validates data against them.
 - `src/storage/` contains immutable JSON storage.
-- `src/runtime/` defines the adapter boundary and deterministic fake adapter.
+- `src/runtime/` defines the adapter boundary and deterministic fake adapter; `src/runtime/select-adapter.ts` maps a runtime identifier to an adapter.
 - `src/catalog/` loads and cross-validates catalogs.
 - `src/commands/` and `src/cli/` implement CLI behavior.
 - `tests/` mirrors these responsibilities with unit and command-level tests.
@@ -80,5 +84,6 @@ Keep case definitions independent of a specific agent runtime. Keep skills as da
 - The immutable JSON store protects sequential writes, but concurrent writers can race because standard POSIX `rename` may replace an existing destination.
 - Manifest discovery currently looks exactly one directory below `cases/` and `variants/`.
 - `--public-only` skips only private-oracle availability checks; it must not skip schema, reference, hash, or path validation.
+- Runs execute sequentially. The fake runtime produces a scripted transcript that does not modify the workspace, so an end-to-end run exercises the pipeline rather than agent behavior.
 
 If a later stage resolves one of these limitations, update this file and the README in the same change.
