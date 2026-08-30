@@ -25,6 +25,18 @@ test("canonical JSON rejects values outside its portable data model", () => {
   assert.throws(() => canonicalJson(cycle));
 });
 
+test("canonical JSON rejects sparse array holes", () => {
+  const sparse = new Array<unknown>(1);
+  assert.throws(() => canonicalJson(sparse));
+});
+
+test("canonical JSON rejects objects with symbol keys", () => {
+  const hidden = Symbol("hidden");
+  const symbolKeyed: Record<PropertyKey, unknown> = { visible: "value" };
+  symbolKeyed[hidden] = "not serializable";
+  assert.throws(() => canonicalJson(symbolKeyed));
+});
+
 test("tree hashes include normalized relative paths and bytes", async () => {
   const first = await mkdtemp(join(tmpdir(), "skillbench-hash-a-"));
   const second = await mkdtemp(join(tmpdir(), "skillbench-hash-b-"));

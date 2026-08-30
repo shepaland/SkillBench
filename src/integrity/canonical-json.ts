@@ -41,8 +41,19 @@ function serializeObject(value: object, ancestors: WeakSet<object>): string {
 
   ancestors.add(value);
   try {
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ValidationError("canonical JSON does not support symbol keys");
+    }
+
     if (Array.isArray(value)) {
-      return `[${value.map((entry) => serialize(entry, ancestors)).join(",")}]`;
+      const entries: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) {
+          throw new ValidationError("canonical JSON does not support sparse array holes");
+        }
+        entries.push(serialize(value[index], ancestors));
+      }
+      return `[${entries.join(",")}]`;
     }
 
     const prototype = Reflect.getPrototypeOf(value);
