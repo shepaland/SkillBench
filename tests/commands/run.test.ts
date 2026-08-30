@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
-import { readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { runRun } from "../../src/commands/run.js";
 import { DependencyError, FindingError, InvocationError } from "../../src/domain/errors.js";
-import { createTempProject } from "../helpers/temp-project.js";
+import { hashTree } from "../../src/integrity/content-hash.js";
+import { createTempProject, writeJson } from "../helpers/temp-project.js";
 
 function createIo() {
   const out: string[] = [];
@@ -111,25 +111,41 @@ test("--json emits one summary document for every run", async () => {
   }
 });
 
-test("a later run still executes after an earlier run errors", async () => {
+test("a later run still executes after an earlier run fails", async () => {
   const project = await createTempProject();
+  await writeFile(join(project.oracleDirectory, "checks/assert-1.js"), "process.exit(9);\n");
   const { io } = createIo();
-  // Catalog resolution (and its oracle coverage checks) happens once before the
-  // repetition loop, so the oracle manifest must still be valid at that point.
-  // Corrupt it on the first clock() call, which fires inside the loop, so each
-  // repetition's grade step fails independently instead of the run being
-  // rejected before any repetition executes.
-  let oracleCorrupted = false;
-  const clock = () => {
-    if (!oracleCorrupted) {
-      oracleCorrupted = true;
-      writeFileSync(join(project.oracleDirectory, "oracle.json"), "{ not json\n");
-    }
-    return new Date("2026-08-30T17:53:02.000Z");
-  };
 
   await assert.rejects(
-    runRun(options(project.root, { runs: "2" }), io, clock, sequentialSuffixes()),
+    runRun(options(project.root, { runs: "2" }), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes()),
+    (error: unknown) => error instanceof FindingError && error.exitCode === 1,
+  );
+
+  const directories = await readdir(join(project.root, "runs/F01/example"));
+  assert.equal(directories.length, 2);
+});
+
+test("a later run still executes after an earlier run errors", async () => {
+  const project = await createTempProject();
+  // The example variant installs into .agent/skills/example for the fake
+  // runtime. Pre-existing that path inside the fixture means every
+  // materialized workspace already has that destination occupied, so the
+  // install step fails independently on every repetition without needing
+  // any mutation during the run.
+  const conflictDirectory = join(project.fixtureDirectory, ".agent/skills/example");
+  await mkdir(conflictDirectory, { recursive: true });
+  await writeFile(join(conflictDirectory, "marker.txt"), "conflict\n");
+
+  const fixtureHash = await hashTree(project.fixtureDirectory);
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    fixture: { ...project.caseManifest.fixture, contentHash: fixtureHash },
+  });
+
+  const { io } = createIo();
+
+  await assert.rejects(
+    runRun(options(project.root, { runs: "2" }), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes()),
     (error: unknown) => error instanceof DependencyError && error.exitCode === 2,
   );
 
