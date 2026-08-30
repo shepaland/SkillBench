@@ -10,6 +10,8 @@ import type { CommandIo } from "./validate.js";
 export interface RunCommandOptions extends RunSelectionOptions {
   readonly runs: string;
   readonly keepWorkspace: boolean;
+  /** Temporary parent for workspaces and grading areas. Tests set it; the command line does not. */
+  readonly tempParent?: string;
 }
 
 export async function runRun(
@@ -35,6 +37,7 @@ export async function runRun(
       runId: createRunId(clock(), suffix()),
       repetitionIndex,
       keepWorkspace: options.keepWorkspace,
+      ...(options.tempParent === undefined ? {} : { tempParent: options.tempParent }),
     }));
   }
 
@@ -44,6 +47,15 @@ export async function runRun(
   if (errored.length > 0) {
     throw new DependencyError(
       errored.map((result) => `${result.runId}: ${result.failedStep ?? "unknown"}: ${result.failureMessage}`).join("\n"),
+    );
+  }
+
+  const uncleaned = results.filter((result) => result.cleanupFailures.length > 0);
+  if (uncleaned.length > 0) {
+    throw new DependencyError(
+      uncleaned
+        .map((result) => `${result.runId}: material left behind: ${result.cleanupFailures.join("; ")}`)
+        .join("\n"),
     );
   }
 
@@ -68,6 +80,7 @@ function report(results: readonly RunResult[], json: boolean, io: CommandIo): vo
           .map((assertion) => assertion.assertionId),
         changedPaths: result.changes.added.length + result.changes.modified.length + result.changes.removed.length,
         costs: result.costs,
+        preservedWorkspacePath: result.preservedWorkspacePath,
         cleanupFailures: result.cleanupFailures,
       })),
     }, null, 2)}\n`);
@@ -79,6 +92,9 @@ function report(results: readonly RunResult[], json: boolean, io: CommandIo): vo
     io.stdout(
       `${result.runId}  ${result.status}  assertions=${passed.toString()}/${result.assertions.length.toString()}  wallClockMs=${result.costs.wallClockMs.toString()}\n`,
     );
+    if (result.preservedWorkspacePath !== null) {
+      io.stdout(`${result.runId}: workspace preserved at ${result.preservedWorkspacePath}\n`);
+    }
     if (result.failedStep !== null) {
       io.stderr(`${result.runId}: failed at ${result.failedStep}: ${result.failureMessage}\n`);
     }

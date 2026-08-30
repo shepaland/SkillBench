@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { runRun } from "../../src/commands/run.js";
 import { DependencyError, FindingError, InvocationError } from "../../src/domain/errors.js";
@@ -152,3 +153,88 @@ test("a later run still executes after an earlier run errors", async () => {
   const directories = await readdir(join(project.root, "runs/F01/example"));
   assert.equal(directories.length, 2);
 });
+
+test("--keep-workspace preserves the workspace and prints its path", async () => {
+  const project = await createTempProject();
+  const json = createIo();
+
+  await runRun(
+    options(project.root, { keepWorkspace: true, json: true }),
+    json.io,
+    () => new Date("2026-08-30T17:53:02.000Z"),
+    sequentialSuffixes(),
+  );
+
+  const parsed = JSON.parse(json.stdout()) as { runs: { preservedWorkspacePath: string | null }[] };
+  const preserved = parsed.runs[0]?.preservedWorkspacePath ?? null;
+  assert.notEqual(preserved, null);
+  await access(preserved ?? "");
+
+  const text = createIo();
+  await runRun(
+    options(project.root, { keepWorkspace: true }),
+    text.io,
+    () => new Date("2026-08-30T17:53:03.000Z"),
+    sequentialSuffixes(),
+  );
+  assert.match(text.stdout(), /workspace preserved at \//u);
+
+  await rm(dirname(preserved ?? ""), { recursive: true, force: true });
+  const printed = /workspace preserved at (?<path>.+)\n/u.exec(text.stdout())?.groups?.["path"] ?? "";
+  await rm(dirname(printed), { recursive: true, force: true });
+});
+
+test(
+  "a run that cannot remove its grading area raises a dependency error",
+  {
+    skip: process.platform === "win32" || process.getuid?.() === 0
+      ? "POSIX directory permissions enforced for a non-root user are required"
+      : false,
+  },
+  async () => {
+    const project = await createTempProject();
+    const tempParent = await mkdtemp(join(tmpdir(), "skillbench-run-cleanup-"));
+    // The check locks the grading root it runs inside, so removing that root
+    // afterwards fails and the run leaves private material on disk.
+    await writeFile(
+      join(project.oracleDirectory, "checks/lock.cjs"),
+      "const { chmodSync } = require('node:fs');\n" +
+        "const { dirname } = require('node:path');\n" +
+        "chmodSync(dirname(process.env.SKILLBENCH_ORACLE), 0o500);\n" +
+        "process.exit(0);\n",
+    );
+    await writeJson(join(project.oracleDirectory, "oracle.json"), {
+      schemaVersion: 1,
+      caseId: "F01",
+      checks: [
+        {
+          assertionId: "assert-1",
+          command: { executor: "node", args: ["lock.cjs"] },
+          workingDirectory: "checks",
+          timeoutMs: 10_000,
+        },
+      ],
+    });
+    const { io, stdout, stderr } = createIo();
+
+    try {
+      await assert.rejects(
+        runRun(
+          options(project.root, { tempParent }),
+          io,
+          () => new Date("2026-08-30T17:53:02.000Z"),
+          sequentialSuffixes(),
+        ),
+        (error: unknown) => error instanceof DependencyError && error.exitCode === 2,
+      );
+      // The run itself stays truthful: only the leftover material is an error.
+      assert.match(stdout(), /completed/u);
+      assert.match(stderr(), /cleanup failures/u);
+    } finally {
+      for (const entry of await readdir(tempParent)) {
+        await chmod(join(tempParent, entry), 0o700);
+      }
+      await rm(tempParent, { recursive: true, force: true });
+    }
+  },
+);

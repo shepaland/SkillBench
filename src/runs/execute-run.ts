@@ -1,5 +1,7 @@
 import type { CatalogCase, CatalogVariant } from "../catalog/load-catalog.js";
+import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
 import type { RuntimeLimits } from "../domain/model.js";
+import { hashTree } from "../integrity/content-hash.js";
 import type { RuntimeAdapter, RuntimeExecution, TranscriptEvent } from "../runtime/runtime-adapter.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
 import { loadOracleManifest } from "../oracles/oracle-manifest.js";
@@ -66,6 +68,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   let status: RunStatus = "completed";
   let failedStep: PipelineStep | null = null;
   let failureMessage = "";
+  let preservedWorkspacePath: string | null = null;
   const cleanupFailures: string[] = [];
 
   try {
@@ -117,6 +120,13 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     step = "grade";
     lifecycle.markAgentClosed();
     const mounted = await lifecycle.mountOracle();
+    const mountedOracleHash = await hashTree(mounted.gradingPath);
+    if (mountedOracleHash !== manifest.oracleHash) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `private oracle changed after freezing: mounted ${mountedOracleHash}, frozen ${manifest.oracleHash}`,
+      );
+    }
     const oracleManifest = await loadOracleManifest(mounted.gradingPath, input.validator);
     assertions = await runOracle({
       manifest: oracleManifest,
@@ -136,7 +146,9 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   } finally {
     const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
     if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
-    if (input.keepWorkspace !== true) {
+    if (input.keepWorkspace === true) {
+      preservedWorkspacePath = workspace?.workspacePath ?? null;
+    } else {
       const workspaceFailure = await cleanupQuietly(workspace, "workspace");
       if (workspaceFailure !== undefined) cleanupFailures.push(workspaceFailure);
     }
@@ -163,6 +175,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       runtimeVersion: execution?.metadata.runtimeVersion ?? input.configuration.runtimeVersion,
       adapterVersion: execution?.metadata.adapterVersion ?? input.configuration.adapterVersion,
     }),
+    preservedWorkspacePath,
     cleanupFailures: Object.freeze(cleanupFailures),
   });
 

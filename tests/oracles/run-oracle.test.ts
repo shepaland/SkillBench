@@ -33,7 +33,10 @@ async function createGradingArea(): Promise<{ gradingPath: string; workspacePath
       "const workspace = process.env.SKILLBENCH_WORKSPACE ?? '';\n" +
       "process.exit(readFileSync(join(workspace, 'marker.txt'), 'utf8') === 'present\\n' ? 0 : 3);\n",
   );
-  await writeFile(join(gradingPath, "checks/fail.js"), "process.exit(4);\n");
+  await writeFile(
+    join(gradingPath, "checks/fail.js"),
+    "process.stderr.write('expected queued to contain 42\\n');\nprocess.exit(4);\n",
+  );
   await writeFile(join(gradingPath, "checks/hang.js"), "setTimeout(() => {}, 60_000);\n");
   await writeFile(join(gradingPath, "package.json"), '{ "type": "module" }\n');
   return { gradingPath, workspacePath };
@@ -56,6 +59,10 @@ test("maps exit codes to passed and failed and reads the workspace through the e
   assert.equal(results[0]?.dimension, "functional");
   assert.equal(results[0].critical, true);
   assert.equal(results[1]?.critical, false);
+  // A failing check names private expected values on its own streams, so no
+  // captured output may reach the persisted result.
+  assert.equal(results[0].detail, "");
+  assert.equal(results[1].detail, "");
 });
 
 test("a timeout produces error for that assertion only", async () => {

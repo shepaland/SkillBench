@@ -8,15 +8,13 @@ import type { ChangePathObservations, ChangeSet } from "./snapshot.js";
 export type RunStatus = "completed" | "exhausted" | "errored";
 
 export type PipelineStep =
-  | "freeze"
   | "materialize"
   | "install"
   | "baseline_snapshot"
   | "execute"
   | "final_snapshot"
   | "grade"
-  | "verify_fixture"
-  | "write_result";
+  | "verify_fixture";
 
 export interface RunCosts {
   readonly inputTokens: number | null;
@@ -41,6 +39,7 @@ export interface RunResult {
     readonly runtimeVersion: string;
     readonly adapterVersion: string;
   };
+  readonly preservedWorkspacePath: string | null;
   readonly cleanupFailures: readonly string[];
 }
 

@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { loadCatalog, type Catalog } from "../catalog/load-catalog.js";
-import { FindingError, InvocationError } from "../domain/errors.js";
+import { loadCatalog, type Catalog, type CatalogCase, type CatalogIssue } from "../catalog/load-catalog.js";
+import { DependencyError, InvocationError } from "../domain/errors.js";
 import type { CommandIo } from "./validate.js";
 
 export interface ListOptions {
@@ -23,7 +23,7 @@ export async function runList(
     io.stderr(`${issue.source}: ${issue.code}: ${issue.message}\n`);
   }
   if (blockingIssues.length > 0) {
-    throw new FindingError(`Listing found ${blockingIssues.length.toString()} finding(s).`);
+    throw new DependencyError(`Listing found ${blockingIssues.length.toString()} blocking catalog issue(s).`);
   }
 
   if (options.json) {
@@ -35,7 +35,7 @@ export async function runList(
     io.stdout("Cases:\n");
     for (const entry of catalog.cases) {
       io.stdout(
-        `  ${entry.manifest.id}  ${entry.manifest.title}  [${entry.manifest.categories.join(", ")}]  assertions=${entry.manifest.assertions.length.toString()}  oracle=${entry.oracleHash === undefined ? "missing" : "available"}\n`,
+        `  ${entry.manifest.id}  ${entry.manifest.title}  [${entry.manifest.categories.join(", ")}]  assertions=${entry.manifest.assertions.length.toString()}  oracle=${oracleState(entry, catalog.issues)}\n`,
       );
     }
   }
@@ -49,6 +49,16 @@ export async function runList(
   }
 }
 
+export type OracleState = "available" | "invalid" | "missing";
+
+function oracleState(entry: CatalogCase, issues: readonly CatalogIssue[]): OracleState {
+  if (entry.oracleHash === undefined) return "missing";
+  const broken = issues.some((issue) =>
+    issue.source === entry.source &&
+    (issue.code === "ORACLE_MANIFEST_INVALID" || issue.code === "ORACLE_ASSERTION_MISMATCH"));
+  return broken ? "invalid" : "available";
+}
+
 function toJson(catalog: Catalog, target: string | undefined): Record<string, unknown> {
   const document: Record<string, unknown> = {};
   if (target !== "variants") {
@@ -57,7 +67,7 @@ function toJson(catalog: Catalog, target: string | undefined): Record<string, un
       title: entry.manifest.title,
       categories: entry.manifest.categories,
       assertionCount: entry.manifest.assertions.length,
-      oracleAvailable: entry.oracleHash !== undefined,
+      oracle: oracleState(entry, catalog.issues),
     }));
   }
   if (target !== "cases") {

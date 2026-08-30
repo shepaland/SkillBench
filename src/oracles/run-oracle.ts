@@ -26,6 +26,7 @@ export interface OracleSpawnRequest {
 export interface OracleSpawnResult {
   readonly exitCode: number | null;
   readonly timedOut: boolean;
+  /** SkillBench's own explanation of an error outcome. Never check output. */
   readonly detail: string;
 }
 
@@ -46,7 +47,7 @@ export const defaultOracleSpawn: OracleSpawn = async (request) =>
       resolveExecutable(request.executor),
       [...request.args],
       { cwd: request.cwd, timeout: request.timeoutMs, env: { ...request.env }, windowsHide: true },
-      (error, _stdout, stderr) => {
+      (error) => {
         if (error === null) {
           resolve({ exitCode: 0, timedOut: false, detail: "" });
           return;
@@ -58,11 +59,9 @@ export const defaultOracleSpawn: OracleSpawn = async (request) =>
           reject(error instanceof Error ? error : new Error(error.message));
           return;
         }
-        resolve({
-          exitCode,
-          timedOut,
-          detail: timedOut ? "check timed out" : truncate(stderr),
-        });
+        // A failing check writes expected values to its own streams, so the
+        // captured output is deliberately dropped instead of reported.
+        resolve({ exitCode, timedOut, detail: timedOut ? "check timed out" : "" });
       },
     );
     child.once("error", reject);
@@ -120,9 +119,11 @@ async function executeCheck(
     if (outcome.timedOut) {
       return build(assertion, "error", outcome.exitCode, nowMs() - startedMs, outcome.detail || "check timed out");
     }
+    // `detail` stays empty for passed and failed outcomes: check output names
+    // private expected values and result.json is a shared durable artifact.
     return outcome.exitCode === 0
       ? build(assertion, "passed", 0, nowMs() - startedMs, "")
-      : build(assertion, "failed", outcome.exitCode, nowMs() - startedMs, outcome.detail);
+      : build(assertion, "failed", outcome.exitCode, nowMs() - startedMs, "");
   } catch (cause: unknown) {
     return build(assertion, "error", null, nowMs() - startedMs, errorMessage(cause));
   }

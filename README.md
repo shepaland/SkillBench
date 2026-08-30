@@ -82,6 +82,12 @@ node dist/src/cli.js dry-run --project . --case <case-id> --variant <variant-id>
 node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runs 2
 ```
 
+`--keep-workspace` keeps the temporary workspace after the run instead of removing it and prints its path, so the finished state can be inspected. The private oracle material is removed in every case, whether or not the flag is used.
+
+```sh
+node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --keep-workspace
+```
+
 ### Run evidence
 
 Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/` as four files:
@@ -192,7 +198,7 @@ Catalog problems are written to the separate error stream (`stderr`) in this for
 | `skillbench validate` | None | Validation only reads files, prints messages, and returns an exit code. |
 | `skillbench list` | None | Listing only reads the catalog and prints it. |
 | `skillbench dry-run` | None | The plan is printed only; no workspace is copied and no files are written. |
-| `skillbench run` | `runs/<case-id>/<variant-id>/<run-id>/` | Each run writes its manifest, transcript, changes, and result there. Git ignores the `runs/` directory. |
+| `skillbench run` | `runs/<case-id>/<variant-id>/<run-id>/` | Each run writes its manifest, transcript, changes, and result there. Git ignores the `runs/` directory. With `--keep-workspace` the temporary workspace also stays in the operating system temporary directory. |
 
 Comparisons and Markdown reports are not implemented yet. Those artifacts belong to a later delivery stage.
 
@@ -287,6 +293,12 @@ node dist/src/cli.js dry-run --project . --case <case-id> --variant <variant-id>
 
 ```sh
 node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runs 2
+```
+
+Флаг `--keep-workspace` сохраняет временный рабочий каталог после запуска, вместо того чтобы удалить его, и печатает путь к нему — так можно разобрать итоговое состояние. Материалы закрытого оракула удаляются в любом случае, указан этот флаг или нет.
+
+```sh
+node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --keep-workspace
 ```
 
 ### Свидетельства запуска
@@ -399,7 +411,7 @@ Validated 0 cases and 0 variants.
 | `skillbench validate` | Нет | Проверка только читает файлы, выводит сообщения и возвращает код завершения. |
 | `skillbench list` | Нет | Вывод списка только читает каталог и печатает его. |
 | `skillbench dry-run` | Нет | Печатается только план; рабочий каталог не копируется, файлы не записываются. |
-| `skillbench run` | `runs/<case-id>/<variant-id>/<run-id>/` | Каждый запуск записывает туда манифест, запись диалога, изменения и результат. Git игнорирует каталог `runs/`. |
+| `skillbench run` | `runs/<case-id>/<variant-id>/<run-id>/` | Каждый запуск записывает туда манифест, запись диалога, изменения и результат. Git игнорирует каталог `runs/`. С флагом `--keep-workspace` временный рабочий каталог также остаётся в системной папке для временных файлов. |
 
 Сравнения и отчёты Markdown ещё не реализованы. Эти файлы появятся на следующем этапе разработки.
 
