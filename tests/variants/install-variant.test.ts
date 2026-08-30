@@ -179,6 +179,66 @@ test("removes parents created before parent creation fails", async () => {
   }
 });
 
+test("preserves a foreign nested entry when its copy collides after owning the destination root", async () => {
+  const project = await createTempProject();
+  const sourceNestedDirectory = join(project.exampleInstallDirectory, "nested");
+  await mkdir(sourceNestedDirectory);
+  await writeFile(join(sourceNestedDirectory, "owned.md"), "owned nested content\n");
+  const variant = await exampleVariant(project.root);
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const destination = join(workspace.workspacePath, ".codex/skills/example");
+  const nestedDestination = join(destination, "nested");
+  const originalMkdir = safeTreeFileSystem.mkdir.bind(safeTreeFileSystem);
+  safeTreeFileSystem.mkdir = async (path: string): Promise<unknown> => {
+    if (path === nestedDestination) {
+      await originalMkdir(path);
+      await writeFile(join(path, "foreign.md"), "foreign nested content\n");
+      throw errno("EEXIST", "forced nested destination conflict");
+    }
+    return originalMkdir(path);
+  };
+  try {
+    await assertFileLifecycleError(
+      () => installVariant({ variant, runtime: "codex", workspacePath: workspace.workspacePath }),
+      "UNSAFE_FILESYSTEM_INPUT",
+    );
+    assert.equal(await readFile(join(nestedDestination, "foreign.md"), "utf8"), "foreign nested content\n");
+    await assert.rejects(() => access(join(destination, "SKILL.md")), { code: "ENOENT" });
+  } finally {
+    safeTreeFileSystem.mkdir = originalMkdir;
+    await workspace.cleanup();
+  }
+});
+
+test("preserves parent creation failure when its cleanup fails", async () => {
+  const project = await createTempProject();
+  const variant = await exampleVariant(project.root);
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const failingParent = join(workspace.workspacePath, ".codex/skills");
+  const originalMkdir = safeTreeFileSystem.mkdir.bind(safeTreeFileSystem);
+  const originalRmdir = safeTreeFileSystem.rmdir.bind(safeTreeFileSystem);
+  safeTreeFileSystem.mkdir = async (path: string): Promise<unknown> => {
+    if (path === failingParent) throw errno("EACCES", "forced parent creation failure");
+    return originalMkdir(path);
+  };
+  safeTreeFileSystem.rmdir = (): Promise<void> => Promise.reject(new Error("forced parent cleanup failure"));
+  try {
+    await assert.rejects(
+      () => installVariant({ variant, runtime: "codex", workspacePath: workspace.workspacePath }),
+      (error: unknown) => error instanceof FileLifecycleError &&
+        error.message.includes("forced parent creation failure") &&
+        error.cause instanceof Error && error.cause.message === "forced parent creation failure" &&
+        error.cleanupFailure instanceof Error && error.cleanupFailure.message === "forced parent cleanup failure",
+    );
+  } finally {
+    safeTreeFileSystem.mkdir = originalMkdir;
+    safeTreeFileSystem.rmdir = originalRmdir;
+    await workspace.cleanup();
+  }
+});
+
 for (const kind of ["file", "directory"] as const) {
   test(`rejects an existing destination ${kind} without changing its bytes`, async () => {
     const project = await createTempProject();

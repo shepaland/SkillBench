@@ -1,4 +1,4 @@
-import { copyFile, lstat, mkdir, readdir, rm, rmdir } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, rm, rmdir, unlink } from "node:fs/promises";
 import { constants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
@@ -11,9 +11,10 @@ export interface SafeTreeFileSystem {
   copyFile(source: string, destination: string, mode?: number): Promise<void>;
   rm(path: string, options: { recursive: true; force: true }): Promise<void>;
   rmdir(path: string): Promise<void>;
+  unlink(path: string): Promise<void>;
 }
 
-export const safeTreeFileSystem: SafeTreeFileSystem = { lstat, readdir, mkdir, copyFile, rm, rmdir };
+export const safeTreeFileSystem: SafeTreeFileSystem = { lstat, readdir, mkdir, copyFile, rm, rmdir, unlink };
 
 export function isSameOrInside(parent: string, candidate: string): boolean {
   const child = relative(parent, candidate);
@@ -30,7 +31,7 @@ export async function copySafeTree(
     await copyEntry(source, destination, "", created, fileSystem);
   } catch (cause: unknown) {
     try {
-      await rollbackCreatedPaths(created, fileSystem);
+      await rollbackCreatedCopyEntries(created, fileSystem);
     } catch (cleanupFailure: unknown) {
       throw new FileLifecycleError(
         cause instanceof FileLifecycleError ? cause.code : "UNSAFE_FILESYSTEM_INPUT",
@@ -77,7 +78,15 @@ export async function createAbsentParents(
       }
     }
   } catch (cause: unknown) {
-    await rollbackCreatedEmptyDirectories(created, fileSystem);
+    try {
+      await rollbackCreatedEmptyDirectories(created, fileSystem);
+    } catch (cleanupFailure: unknown) {
+      throw new FileLifecycleError(
+        cause instanceof FileLifecycleError ? cause.code : "UNSAFE_FILESYSTEM_INPUT",
+        `safe parent creation failed: ${errorMessage(cause)}`,
+        { cause, cleanupFailure },
+      );
+    }
     throw cause;
   }
   return created;
@@ -137,6 +146,38 @@ export async function rollbackCreatedEmptyDirectories(
       await fileSystem.rmdir(path);
     } catch (error: unknown) {
       if (isMissingPath(error) || isNonEmptyDirectory(error)) continue;
+      throw error;
+    }
+  }
+}
+
+async function rollbackCreatedCopyEntries(
+  created: readonly string[],
+  fileSystem: SafeTreeFileSystem = safeTreeFileSystem,
+): Promise<void> {
+  for (const path of [...created].sort((left, right) => right.length - left.length)) {
+    let status;
+    try {
+      status = await fileSystem.lstat(path);
+    } catch (error: unknown) {
+      if (isMissingPath(error)) continue;
+      throw error;
+    }
+
+    if (status.isDirectory()) {
+      try {
+        await fileSystem.rmdir(path);
+      } catch (error: unknown) {
+        if (isMissingPath(error) || isNonEmptyDirectory(error)) continue;
+        throw error;
+      }
+      continue;
+    }
+
+    try {
+      await fileSystem.unlink(path);
+    } catch (error: unknown) {
+      if (isMissingPath(error)) continue;
       throw error;
     }
   }
