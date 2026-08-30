@@ -103,7 +103,7 @@ Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/` as fo
 
 ### Private oracle manifest
 
-Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the assertions declared in the case — no assertion left without a check, and no check for an assertion the case does not declare.
+Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the assertions declared in the case — no assertion left without a check, no check for an assertion the case does not declare, and no two checks naming the same assertion.
 
 ### Requirements
 
@@ -172,9 +172,9 @@ Validated 0 cases and 0 variants.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Validation finished and found no problems. |
-| `1` | Validation finished and found catalog problems. |
-| `2` | The command is invalid, a dependency is unavailable, or the requested workflow is not implemented. |
+| `0` | The command finished and everything it checked passed. |
+| `1` | The command finished and found problems with what it checked. `validate` found catalog problems; `run` finished without solving the case, either because a critical check failed or because the agent ran out of its limits. |
+| `2` | The command could not do its work: the command line was wrong, an unknown case or variant was given, a dependency was missing or broken (such as the private oracle), or a run failed because the tool itself broke. |
 
 Catalog problems are written to the separate error stream (`stderr`) in this format:
 
@@ -310,7 +310,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --r
 
 ### Манифест закрытого оракула
 
-Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те утверждения, что заявлены в кейсе, — без утверждений без проверки и без проверок для незаявленных утверждений.
+Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те утверждения, что заявлены в кейсе, — без утверждений без проверки, без проверок для незаявленных утверждений и без двух проверок на одно и то же утверждение.
 
 ### Требования
 
@@ -379,9 +379,9 @@ Validated 0 cases and 0 variants.
 
 | Код | Значение |
 | --- | --- |
-| `0` | Проверка завершилась без ошибок. |
-| `1` | Проверка завершилась и нашла проблемы в каталоге. |
-| `2` | Команда записана неверно, зависимость недоступна или выбранная операция пока не реализована. |
+| `0` | Команда завершилась, и всё, что она проверяла, прошло успешно. |
+| `1` | Команда завершилась и нашла проблемы в том, что проверяла. `validate` нашла проблемы в каталоге; `run` завершился, не решив задачу, — либо провалилась критическая проверка, либо агент исчерпал свои лимиты. |
+| `2` | Команда не смогла выполнить свою работу: неверная командная строка, неизвестный кейс или вариант, отсутствующая или сломанная зависимость (например, закрытый оракул), либо запуск, который прервался из-за поломки самого инструмента. |
 
 Проблемы каталога выводятся в отдельный поток ошибок (`stderr`) в таком формате:
 
