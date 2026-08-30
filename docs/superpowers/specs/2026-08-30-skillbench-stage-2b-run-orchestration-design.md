@@ -122,6 +122,24 @@ The manifest is written through the existing immutable JSON store, so a second
 write of a byte-identical manifest is idempotent and a differing write is
 rejected.
 
+## Runtime Configuration and Selection
+
+`dry-run` and `run` accept the frozen configuration as options:
+
+- `--runtime <id>` selects the adapter and defaults to `fake`;
+- `--model <id>` defaults to `fake-model`;
+- `--reasoning <effort>` defaults to `medium`;
+- `--sandbox <mode>` defaults to `workspace-write`.
+
+An unknown runtime identifier is rejected. A variant whose
+`compatibleRuntimes` does not list the selected runtime is rejected.
+
+The `fake` runtime builds a deterministic script from the case prompt steps: one
+assistant message and one completion claim per step, with fixed durations and
+fixed usage. This keeps `run` exercisable end to end without a live agent. The
+adapter reports its own runtime version and adapter version, and those reported
+values are what the run manifest freezes.
+
 ## The `dry-run` Command
 
 ```text
@@ -254,6 +272,11 @@ The manifest declares one check per assertion:
 
 No shell text is accepted, matching the rule that already governs
 `publicVerification`.
+
+Checks never receive a templated path. SkillBench sets the working directory
+inside the grading area and passes two environment variables: `SKILLBENCH_WORKSPACE`
+with the absolute agent workspace path, and `SKILLBENCH_ORACLE` with the absolute
+grading-area path. A check reads the workspace through `SKILLBENCH_WORKSPACE`.
 
 ### Execution rules
 
