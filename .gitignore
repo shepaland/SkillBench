@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.private/
+runs/
+.worktrees/
+.superpowers/
+*.log
+.DS_Store
