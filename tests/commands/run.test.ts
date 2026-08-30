@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -113,10 +114,22 @@ test("--json emits one summary document for every run", async () => {
 test("a later run still executes after an earlier run errors", async () => {
   const project = await createTempProject();
   const { io } = createIo();
-  await writeFile(join(project.oracleDirectory, "oracle.json"), "{ not json\n");
+  // Catalog resolution (and its oracle coverage checks) happens once before the
+  // repetition loop, so the oracle manifest must still be valid at that point.
+  // Corrupt it on the first clock() call, which fires inside the loop, so each
+  // repetition's grade step fails independently instead of the run being
+  // rejected before any repetition executes.
+  let oracleCorrupted = false;
+  const clock = () => {
+    if (!oracleCorrupted) {
+      oracleCorrupted = true;
+      writeFileSync(join(project.oracleDirectory, "oracle.json"), "{ not json\n");
+    }
+    return new Date("2026-08-30T17:53:02.000Z");
+  };
 
   await assert.rejects(
-    runRun(options(project.root, { runs: "2" }), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes()),
+    runRun(options(project.root, { runs: "2" }), io, clock, sequentialSuffixes()),
     (error: unknown) => error instanceof DependencyError && error.exitCode === 2,
   );
 
