@@ -1,0 +1,202 @@
+import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import test from "node:test";
+import { loadCatalog, type CatalogIssue } from "../../src/catalog/load-catalog.js";
+import { createTempProject, writeJson } from "../helpers/temp-project.js";
+
+test("loads a valid catalog and treats every empty-install variant uniformly", async () => {
+  const project = await createTempProject();
+  await writeJson(project.controlManifestPath, {
+    ...project.controlManifest,
+    id: "future-empty",
+  });
+
+  const catalog = await loadCatalog(project.root);
+
+  assert.deepEqual(catalog.issues, []);
+  assert.deepEqual(catalog.cases.map(({ manifest }) => manifest.id), ["F01"]);
+  assert.deepEqual(catalog.variants.map(({ manifest }) => manifest.id), ["future-empty", "example"]);
+  const catalogCase = catalog.cases[0];
+  assert.ok(catalogCase);
+  assert.equal(catalogCase.fixtureHash, project.caseManifest.fixture.contentHash);
+  assert.match(catalogCase.oracleHash ?? "", /^sha256:[0-9a-f]{64}$/);
+  assert.equal(catalog.variants[0]?.materialHash, project.controlManifest.contentHash);
+});
+
+test("reports duplicate case identifiers across distinct manifest files", async () => {
+  const project = await createTempProject();
+  const duplicateDirectory = join(project.root, "cases/Z99");
+  await mkdir(duplicateDirectory, { recursive: true });
+  await writeJson(join(duplicateDirectory, "case.json"), project.caseManifest);
+
+  const catalog = await loadCatalog(project.root);
+
+  assert.deepEqual(issueCodes(catalog.issues), ["DUPLICATE_CASE_ID"]);
+  assert.equal(catalog.issues[0]?.source, "cases/Z99/case.json");
+});
+
+test("reports a fixture that cannot be resolved", async () => {
+  const project = await createTempProject();
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    fixture: { ...project.caseManifest.fixture, path: "fixtures/missing" },
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["FIXTURE_UNAVAILABLE"]);
+});
+
+test("reports a fixture whose tree no longer matches its declared hash", async () => {
+  const project = await createTempProject();
+  await writeFile(join(project.fixtureDirectory, "unexpected.js"), "export const changed = true;\n");
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["FIXTURE_HASH_MISMATCH"]);
+});
+
+test("reports assertion identifiers duplicated with different declarations", async () => {
+  const project = await createTempProject();
+  const assertion = project.caseManifest.assertions[0];
+  assert.ok(assertion);
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    assertions: [assertion, { ...assertion, dimension: "security" }],
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["DUPLICATE_ASSERTION_ID"]);
+});
+
+test("reports continuation references to absent rules and prompt steps independently", async () => {
+  const project = await createTempProject();
+  const promptStep = project.caseManifest.promptSteps[0];
+  const transcriptRule = project.caseManifest.transcriptRules?.[0];
+  assert.ok(promptStep);
+  assert.ok(transcriptRule);
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    promptSteps: [
+      { ...promptStep, continuation: { eventRuleIds: ["missing-rule"] } },
+    ],
+    transcriptRules: [{ ...transcriptRule, beforeStepId: "missing-step" }],
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
+    "CONTINUATION_RULE_NOT_FOUND",
+    "TRANSCRIPT_STEP_NOT_FOUND",
+  ]);
+});
+
+test("requires a non-empty private oracle by default but permits public-only validation", async () => {
+  const project = await createTempProject();
+  await writeJson(project.caseManifestPath, { ...project.caseManifest, id: "F02" });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["ORACLE_UNAVAILABLE"]);
+  assert.deepEqual((await loadCatalog(project.root, { requirePrivateOracles: false })).issues, []);
+
+  await mkdir(join(project.root, ".private/oracles/F02"), { recursive: true });
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["ORACLE_EMPTY"]);
+});
+
+test("reports a variant whose installed material no longer matches its declared hash", async () => {
+  const project = await createTempProject();
+  await writeFile(join(project.exampleInstallDirectory, "SKILL.md"), "# Changed skill\n");
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["VARIANT_HASH_MISMATCH"]);
+});
+
+test("requires every install to declare a destination for every compatible runtime", async () => {
+  const project = await createTempProject();
+  await writeJson(project.exampleManifestPath, {
+    ...project.exampleManifest,
+    compatibleRuntimes: ["codex", "future-runtime"],
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
+    "MISSING_RUNTIME_DESTINATION",
+  ]);
+});
+
+test("reports equal, ancestor, and descendant allowed/forbidden path overlaps", async () => {
+  const pathPairs = [
+    ["src", "src"],
+    ["src/", "src/server"],
+    ["src/server", "src/"],
+  ] as const;
+
+  for (const [allowed, forbidden] of pathPairs) {
+    const project = await createTempProject();
+    await writeJson(project.caseManifestPath, {
+      ...project.caseManifest,
+      allowedChangePaths: [allowed],
+      forbiddenChangePaths: [forbidden],
+    });
+
+    assert.deepEqual(
+      issueCodes((await loadCatalog(project.root)).issues),
+      ["CHANGE_PATH_OVERLAP"],
+      `${allowed} must overlap ${forbidden}`,
+    );
+  }
+});
+
+test("skips unusable manifests, continues after recoverable errors, and sorts every issue", async () => {
+  const project = await createTempProject();
+  const malformedDirectory = join(project.root, "cases/A00");
+  const invalidDirectory = join(project.root, "cases/B00");
+  await Promise.all([
+    mkdir(malformedDirectory, { recursive: true }),
+    mkdir(invalidDirectory, { recursive: true }),
+    writeFile(join(project.fixtureDirectory, "changed.js"), "changed\n"),
+    writeFile(join(project.exampleInstallDirectory, "changed.txt"), "changed\n"),
+  ]);
+  await writeFile(join(malformedDirectory, "case.json"), "{not json\n");
+  await writeJson(join(invalidDirectory, "case.json"), { schemaVersion: 1 });
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    allowedChangePaths: ["src"],
+    forbiddenChangePaths: ["src/internal"],
+  });
+  await writeJson(project.exampleManifestPath, {
+    ...project.exampleManifest,
+    compatibleRuntimes: ["codex", "future-runtime"],
+  });
+
+  const catalog = await loadCatalog(project.root);
+  const sorted = [...catalog.issues].sort(compareIssues);
+
+  assert.deepEqual(catalog.issues, sorted);
+  assert.deepEqual(issueCodes(catalog.issues), [
+    "JSON_PARSE",
+    "SCHEMA_VALIDATION",
+    "CHANGE_PATH_OVERLAP",
+    "FIXTURE_HASH_MISMATCH",
+    "MISSING_RUNTIME_DESTINATION",
+    "VARIANT_HASH_MISMATCH",
+  ]);
+  assert.equal(catalog.cases.length, 1);
+  assert.equal(catalog.variants.length, 2);
+});
+
+test("discovers only manifests at the documented one-directory-deep paths", async () => {
+  const project = await createTempProject();
+  await Promise.all([
+    writeFile(join(project.caseDirectory, "ignored.json"), "{not json"),
+    writeFile(join(project.exampleVariantDirectory, "ignored.json"), "{not json"),
+    writeFile(join(project.root, "cases/case.json"), "{not json"),
+  ]);
+
+  assert.deepEqual((await loadCatalog(project.root)).issues, []);
+});
+
+function issueCodes(issues: readonly CatalogIssue[]): string[] {
+  return issues.map(({ code }) => code);
+}
+
+function compareIssues(left: CatalogIssue, right: CatalogIssue): number {
+  return compareText(left.source, right.source) ||
+    compareText(left.code, right.code) ||
+    compareText(left.message, right.message);
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
