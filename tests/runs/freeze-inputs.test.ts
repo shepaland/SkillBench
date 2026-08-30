@@ -80,6 +80,48 @@ test("refuses to freeze when the private oracle hash is unavailable", async () =
   );
 });
 
+test("refuses to freeze when the fixture hash is unavailable", async () => {
+  const project = await createTempProject();
+  const catalog = await loadCatalog(project.root);
+  const catalogCase = catalog.cases[0];
+  const variant = catalog.variants.find((candidate) => candidate.manifest.id === "example");
+  assert.ok(catalogCase !== undefined && variant !== undefined);
+  const { fixtureHash: _fixtureHash, ...caseWithoutFixtureHash } = catalogCase;
+  void _fixtureHash;
+
+  assert.throws(
+    () => freezeRunInputs({
+      catalogCase: caseWithoutFixtureHash,
+      variant,
+      configuration,
+      repetitionIndex: 0,
+      runId: "20260830T175302Z-a1b2c3",
+    }),
+    (error: unknown) => error instanceof DependencyError && /fixture/u.test(error.message),
+  );
+});
+
+test("refuses to freeze when the variant material hash is unavailable", async () => {
+  const project = await createTempProject();
+  const catalog = await loadCatalog(project.root);
+  const catalogCase = catalog.cases[0];
+  const variant = catalog.variants.find((candidate) => candidate.manifest.id === "example");
+  assert.ok(catalogCase !== undefined && variant !== undefined);
+  const { materialHash: _materialHash, ...variantWithoutMaterialHash } = variant;
+  void _materialHash;
+
+  assert.throws(
+    () => freezeRunInputs({
+      catalogCase,
+      variant: variantWithoutMaterialHash,
+      configuration,
+      repetitionIndex: 0,
+      runId: "20260830T175302Z-a1b2c3",
+    }),
+    (error: unknown) => error instanceof DependencyError && /variant material/u.test(error.message),
+  );
+});
+
 test("refuses a variant that is incompatible with the selected runtime", async () => {
   const project = await createTempProject();
   const catalog = await loadCatalog(project.root);
