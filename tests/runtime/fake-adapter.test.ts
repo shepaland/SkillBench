@@ -4,6 +4,15 @@ import { FakeAdapter, type FakeScript } from "../../src/runtime/fake-adapter.js"
 import type { RuntimeInput, TranscriptEvent } from "../../src/runtime/runtime-adapter.js";
 
 test("fake adapter emits a deterministic two-step transcript and continues between declared steps", async () => {
+  let stepTwoPromptObserved = false;
+  let beginContinuation: (() => void) | undefined;
+  let releaseContinuation: (() => void) | undefined;
+  const continuationStarted = new Promise<void>((resolve) => {
+    beginContinuation = resolve;
+  });
+  const continuationBarrier = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
   const script: FakeScript = {
     steps: [
       {
@@ -32,7 +41,13 @@ test("fake adapter emits a deterministic two-step transcript and continues betwe
     workspace: "/intentionally-unread-workspace",
     promptSteps: [
       { id: "step-1", prompt: "Please inspect the repository.", continuation: { eventRuleIds: ["approval"] } },
-      { id: "step-2", prompt: "Approved. Continue." }
+      {
+        id: "step-2",
+        get prompt(): string {
+          stepTwoPromptObserved = true;
+          return "Approved. Continue.";
+        }
+      }
     ],
     config: {
       model: "test-model",
@@ -42,11 +57,16 @@ test("fake adapter emits a deterministic two-step transcript and continues betwe
     },
     onContinuation: (step, events) => {
       continuations.push({ stepId: step.id, events });
-      return Promise.resolve();
+      beginContinuation?.();
+      return continuationBarrier;
     }
   };
 
-  const execution = await new FakeAdapter(script).execute(input);
+  const executionPromise = new FakeAdapter(script).execute(input);
+  await continuationStarted;
+  assert.equal(stepTwoPromptObserved, false);
+  releaseContinuation?.();
+  const execution = await executionPromise;
 
   assert.deepEqual(execution.events, [
     { type: "session_started", atMs: 0 },
