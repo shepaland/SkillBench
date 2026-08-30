@@ -71,3 +71,24 @@ export interface RunManifest {
   readonly limits: RuntimeLimits;
   readonly repetitionIndex: number;
 }
+
+export interface FrozenRunManifest extends RunManifest {
+  readonly schemaVersion: 1;
+  readonly runId: string;
+  readonly caseId: string;
+  readonly variantId: string;
+  readonly runtime: string;
+}
+
+export interface OracleCheck {
+  readonly assertionId: string;
+  readonly command: TypedCommand;
+  readonly workingDirectory: string;
+  readonly timeoutMs: number;
+}
+
+export interface OracleManifest {
+  readonly schemaVersion: 1;
+  readonly caseId: string;
+  readonly checks: readonly OracleCheck[];
+}

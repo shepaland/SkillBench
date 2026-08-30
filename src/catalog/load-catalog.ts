@@ -1,7 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CaseManifest, ContentHash, VariantManifest } from "../domain/model.js";
+import type { CaseManifest, ContentHash, OracleManifest, VariantManifest } from "../domain/model.js";
 import { hashTree, hashValue } from "../integrity/content-hash.js";
+import { assertOracleCoversAssertions, loadOracleManifest } from "../oracles/oracle-manifest.js";
 import { ProjectPaths } from "../paths/project-paths.js";
 import { ManifestValidator } from "../schemas/validator.js";
 
@@ -18,7 +19,9 @@ export type CatalogIssueCode =
   | "JSON_PARSE"
   | "MANIFEST_READ"
   | "MISSING_RUNTIME_DESTINATION"
+  | "ORACLE_ASSERTION_MISMATCH"
   | "ORACLE_EMPTY"
+  | "ORACLE_MANIFEST_INVALID"
   | "ORACLE_UNAVAILABLE"
   | "SCHEMA_VALIDATION"
   | "TRANSCRIPT_STEP_NOT_FOUND"
@@ -96,7 +99,7 @@ export async function loadCatalog(
   const requirePrivateOracles = options.requirePrivateOracles ?? true;
   const cases: CatalogCase[] = [];
   for (const sourcedCase of sourcedCases) {
-    cases.push(await validateCase(sourcedCase, paths, requirePrivateOracles, issues));
+    cases.push(await validateCase(sourcedCase, paths, requirePrivateOracles, validator, issues));
   }
 
   const variants: CatalogVariant[] = [];
@@ -216,6 +219,7 @@ async function validateCase(
   sourcedCase: SourcedManifest<CaseManifest>,
   paths: ProjectPaths,
   requirePrivateOracle: boolean,
+  validator: ManifestValidator,
   issues: CatalogIssue[],
 ): Promise<CatalogCase> {
   const { source, manifest } = sourcedCase;
@@ -268,6 +272,31 @@ async function validateCase(
         );
       } else {
         oracleHash = await hashTree(oraclePath);
+
+        let oracleManifest: OracleManifest | undefined;
+        try {
+          oracleManifest = await loadOracleManifest(oraclePath, validator);
+        } catch (error: unknown) {
+          addIssue(
+            issues,
+            source,
+            "ORACLE_MANIFEST_INVALID",
+            errorMessage(error).replaceAll("\n", "; "),
+          );
+        }
+
+        if (oracleManifest !== undefined) {
+          try {
+            assertOracleCoversAssertions(oracleManifest, manifest.assertions);
+          } catch (error: unknown) {
+            addIssue(
+              issues,
+              source,
+              "ORACLE_ASSERTION_MISMATCH",
+              errorMessage(error).replaceAll("\n", "; "),
+            );
+          }
+        }
       }
     } catch (error: unknown) {
       addIssue(

@@ -2,26 +2,29 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
 import { ValidationError } from "../domain/errors.js";
-import type { CaseManifest, VariantManifest } from "../domain/model.js";
+import type { CaseManifest, OracleManifest, VariantManifest } from "../domain/model.js";
 
-type ManifestKind = "case" | "variant";
+type ManifestKind = "case" | "variant" | "oracle";
 
 export class ManifestValidator {
   private constructor(
     private readonly caseSchema: ValidateFunction,
     private readonly variantSchema: ValidateFunction,
+    private readonly oracleSchema: ValidateFunction,
   ) {}
 
   public static async create(schemaDirectory: string): Promise<ManifestValidator> {
-    const [caseSource, variantSource] = await Promise.all([
+    const [caseSource, variantSource, oracleSource] = await Promise.all([
       readFile(join(schemaDirectory, "case.schema.json"), "utf8"),
       readFile(join(schemaDirectory, "variant.schema.json"), "utf8"),
+      readFile(join(schemaDirectory, "oracle.schema.json"), "utf8"),
     ]);
     const caseSchema = parseSchema(caseSource, "case");
     const variantSchema = parseSchema(variantSource, "variant");
+    const oracleSchema = parseSchema(oracleSource, "oracle");
     const ajv = new Ajv2020({ allErrors: true, strict: true });
 
-    return new ManifestValidator(ajv.compile(caseSchema), ajv.compile(variantSchema));
+    return new ManifestValidator(ajv.compile(caseSchema), ajv.compile(variantSchema), ajv.compile(oracleSchema));
   }
 
   public validateCase(value: unknown): CaseManifest {
@@ -30,6 +33,10 @@ export class ManifestValidator {
 
   public validateVariant(value: unknown): VariantManifest {
     return this.validate("variant", this.variantSchema, value);
+  }
+
+  public validateOracle(value: unknown): OracleManifest {
+    return this.validate("oracle", this.oracleSchema, value);
   }
 
   private validate(
@@ -43,16 +50,21 @@ export class ManifestValidator {
     value: unknown,
   ): VariantManifest;
   private validate(
+    kind: "oracle",
+    validator: ValidateFunction,
+    value: unknown,
+  ): OracleManifest;
+  private validate(
     kind: ManifestKind,
     validator: ValidateFunction,
     value: unknown,
-  ): CaseManifest | VariantManifest {
+  ): CaseManifest | VariantManifest | OracleManifest {
     if (!validator(value)) {
       throw new ValidationError(renderErrors(kind, validator.errors ?? []));
     }
 
     // This is the sole assertion from schema-validated JSON into branded domain types.
-    return structuredClone(value) as CaseManifest | VariantManifest;
+    return structuredClone(value) as CaseManifest | VariantManifest | OracleManifest;
   }
 }
 

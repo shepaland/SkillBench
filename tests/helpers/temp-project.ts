@@ -14,6 +14,7 @@ export interface TempProject {
   readonly exampleInstallDirectory: string;
   readonly schemaDirectory: string;
   readonly oracleDirectory: string;
+  readonly oracleManifestPath: string;
   readonly caseManifestPath: string;
   readonly controlManifestPath: string;
   readonly exampleManifestPath: string;
@@ -41,14 +42,38 @@ export async function createTempProject(): Promise<TempProject> {
     mkdir(oracleDirectory, { recursive: true }),
   ]);
 
+  const oracleManifestPath = join(oracleDirectory, "oracle.json");
+
   const publishedSchemas = join(import.meta.dirname, "../../schemas");
   await Promise.all([
     copyFile(join(publishedSchemas, "case.schema.json"), join(schemaDirectory, "case.schema.json")),
     copyFile(join(publishedSchemas, "variant.schema.json"), join(schemaDirectory, "variant.schema.json")),
+    copyFile(join(publishedSchemas, "oracle.schema.json"), join(schemaDirectory, "oracle.schema.json")),
     writeFile(join(fixtureDirectory, "index.js"), "export const queued = [];\n"),
     writeFile(join(exampleInstallDirectory, "SKILL.md"), "# Example skill\n"),
     writeFile(join(oracleDirectory, "assertions.js"), "export const assertions = ['functional'];\n"),
   ]);
+
+  await mkdir(join(oracleDirectory, "checks"), { recursive: true });
+  await writeFile(
+    join(oracleDirectory, "checks/assert-1.js"),
+    "process.exit(0);\n",
+  );
+  await writeFile(
+    oracleManifestPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      caseId: "F01",
+      checks: [
+        {
+          assertionId: "assert-1",
+          command: { executor: "node", args: ["assert-1.js"] },
+          workingDirectory: "checks",
+          timeoutMs: 10_000,
+        },
+      ],
+    }, null, 2)}\n`,
+  );
 
   const caseManifest: CaseManifest = {
     schemaVersion: 1,
@@ -78,7 +103,7 @@ export async function createTempProject(): Promise<TempProject> {
     schemaVersion: 1,
     id: "control",
     displayName: "Control",
-    compatibleRuntimes: ["codex"],
+    compatibleRuntimes: ["codex", "fake"],
     installs: [],
     claimedCategories: ["implementation"],
     environment: {},
@@ -90,11 +115,11 @@ export async function createTempProject(): Promise<TempProject> {
     schemaVersion: 1,
     id: "example",
     displayName: "Example",
-    compatibleRuntimes: ["codex"],
+    compatibleRuntimes: ["codex", "fake"],
     installs: [
       {
         source: installSource,
-        destinations: { codex: ".codex/skills/example" },
+        destinations: { codex: ".codex/skills/example", fake: ".agent/skills/example" },
       },
     ],
     claimedCategories: ["implementation"],
@@ -122,6 +147,7 @@ export async function createTempProject(): Promise<TempProject> {
     exampleInstallDirectory,
     schemaDirectory,
     oracleDirectory,
+    oracleManifestPath,
     caseManifestPath,
     controlManifestPath,
     exampleManifestPath,
