@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillbench.dev/schemas/variant.schema.json",
+  "title": "SkillBench variant manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "displayName",
+    "compatibleRuntimes",
+    "installs",
+    "claimedCategories",
+    "environment",
+    "contentHash"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "$ref": "#/$defs/id" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "compatibleRuntimes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "installs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/install" }
+    },
+    "claimedCategories": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "environment": { "$ref": "#/$defs/environment" },
+    "contentHash": { "$ref": "#/$defs/contentHash" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{1,63}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\0]+$"
+    },
+    "contentHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "destinations": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]{1,63}$": { "$ref": "#/$defs/relativePath" }
+      },
+      "additionalProperties": false
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "destinations"],
+      "properties": {
+        "source": { "$ref": "#/$defs/relativePath" },
+        "destinations": { "$ref": "#/$defs/destinations" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "propertyNames": { "pattern": "^SKILLBENCH_[A-Z0-9_]+$" },
+      "patternProperties": {
+        "^SKILLBENCH_[A-Z0-9_]+$": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
