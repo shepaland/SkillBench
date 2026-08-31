@@ -156,6 +156,7 @@ Each case's private grading checks live in `.private/oracles/<case-id>/oracle.js
 | Node.js | Version 22 or newer |
 | Package manager | npm, included with Node.js |
 | Network | Needed for the first `npm ci` unless the npm cache already contains every package |
+| Codex command-line tool | Optional. Needed only for `--runtime codex` and for the live smoke check. `dry-run` needs it installed; `run` also needs it logged in. Nothing else in this project uses it, and no automated test starts a session. |
 
 ### Install and build
 
@@ -412,6 +413,7 @@ SKILLBENCH_LIVE=1 npm run smoke:codex
 | Node.js | Версия 22 или новее |
 | Менеджер пакетов | npm, входит в комплект Node.js |
 | Сеть | Нужна для первого запуска `npm ci`, если в кеше npm нет всех пакетов |
+| Командная утилита Codex | Необязательно. Нужна только для `--runtime codex` и для проверки вживую. Команде `dry-run` достаточно установленной утилиты; команде `run` нужен ещё и выполненный вход. Больше её в проекте ничто не использует, и ни один автоматический тест не запускает сессию. |
 
 ### Установка и сборка
 
