@@ -120,7 +120,10 @@ export class CodexAdapter implements RuntimeAdapter {
         // stop here rather than sending a further prompt into a broken thread.
         if (exitCode !== null && exitCode !== 0) break;
 
-        if (index === 0 && threadId === null) {
+        // The identifier only matters because a later step has to resume this session.
+        // A single-step case has no later step, so a missing identifier is no reason to
+        // throw away a run that otherwise completed.
+        if (index === 0 && threadId === null && input.promptSteps.length > 1) {
           throw new DependencyError(
             "the codex runtime reported no thread identifier; a later step cannot be resumed",
           );

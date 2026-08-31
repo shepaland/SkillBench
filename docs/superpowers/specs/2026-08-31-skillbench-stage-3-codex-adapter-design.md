@@ -293,7 +293,8 @@ Robustness rules:
 - an unrecognized or malformed line is counted as unparsed and preserved in the raw
   evidence; it never fails the run;
 - a missing session identifier after the first step **is** a failure, with a clear
-  message, because the next step has nowhere to go;
+  message, because the next step has nowhere to go; a case with a single prompt step
+  has no next step, so it is not a failure there;
 - the raw stream of each step is written to evidence before parsing, so a parser defect
   never destroys the underlying data.
 

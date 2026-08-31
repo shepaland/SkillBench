@@ -132,6 +132,19 @@ test("fails with a clear message when the first step reports no thread", async (
   );
 });
 
+test("does not require a thread identifier when the case has a single step", async () => {
+  const { execution } = await run(
+    [{ lines: [messageLine("done"), usageLine(1, 1)] }],
+    {},
+    [{ id: "s1", prompt: "go" }],
+  );
+
+  assert.equal(execution.exhaustion, null);
+  assert.equal(execution.process.exitCode, 0);
+  assert.equal(execution.events.at(-1)?.type, "session_closed");
+  assert.ok(execution.events.some((event) => event.type === "assistant_message"));
+});
+
 test("counts an unparsed line without failing the run", async () => {
   const raw: string[] = [];
   const { execution } = await run(
