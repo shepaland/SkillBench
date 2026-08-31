@@ -124,7 +124,10 @@ export class CodexAdapter implements RuntimeAdapter {
           );
         }
 
-        if (step.continuation !== undefined && index < input.promptSteps.length - 1) {
+        // Every referenced rule is evaluated exactly once, at its continuation point,
+        // with no exception for the last step: skipping it would leave that rule with
+        // no outcome and turn a correct run into a reported failure.
+        if (step.continuation !== undefined) {
           await input.onContinuation(step, Object.freeze([...events]));
         }
       }

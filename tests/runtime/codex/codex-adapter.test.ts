@@ -95,6 +95,35 @@ test("runs two steps, resuming the thread and awaiting the continuation", async 
   assert.ok(secondArgs.includes("t-1"));
 });
 
+test("evaluates a continuation declared on the final step", async () => {
+  // A rule referenced by the last step's continuation is a referenced rule like any
+  // other: the core excludes it from the after-session sweep, so an adapter that
+  // skipped the last gate would leave it with no outcome and grade a correct run as
+  // an error — while the same case graded normally under the fake runtime.
+  const gated: string[] = [];
+  const { execution } = await run(
+    [
+      { lines: [threadLine("t-1"), usageLine(1, 1)] },
+      { lines: [threadLine("t-1"), usageLine(1, 1)] },
+    ],
+    {},
+    [
+      { id: "s1", prompt: "ask first", continuation: { eventRuleIds: ["stopped"] } },
+      { id: "s2", prompt: "now do it", continuation: { eventRuleIds: ["finished"] } },
+    ],
+    {
+      onContinuation: (step) => {
+        gated.push(step.id);
+        return Promise.resolve();
+      },
+    },
+  );
+
+  assert.deepEqual(gated, ["s1", "s2"]);
+  assert.equal(execution.events.at(-1)?.type, "session_closed");
+  assert.equal(execution.exhaustion, null);
+});
+
 test("fails with a clear message when the first step reports no thread", async () => {
   await assert.rejects(
     run([{ lines: [messageLine("hello"), usageLine(1, 1)] }, { lines: [] }]),

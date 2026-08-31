@@ -73,9 +73,6 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   const cleanupFailures: string[] = [];
   const ruleOutcomes: TranscriptRuleOutcome[] = [];
   const rules: readonly TranscriptRule[] = input.catalogCase.manifest.transcriptRules ?? [];
-  const gatedRuleIds = new Set(
-    input.catalogCase.manifest.promptSteps.flatMap((step) => [...(step.continuation?.eventRuleIds ?? [])]),
-  );
 
   try {
     workspace = await materializeWorkspace({
@@ -120,7 +117,15 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       },
       onRawLine: (stepId, line) => { writer.appendRawLine(stepId, line); },
     });
-    ruleOutcomes.push(...evaluateRules(rules.filter((rule) => !gatedRuleIds.has(rule.id)), execution.events));
+    // Every rule still without an outcome is evaluated here, over the full transcript:
+    // rules no continuation references, and gated rules whose continuation point was
+    // never reached because the session ended early. A rule already evaluated at its
+    // continuation keeps that answer, so no rule is ever evaluated twice.
+    const evaluatedRuleIds = new Set(ruleOutcomes.map((outcome) => outcome.ruleId));
+    ruleOutcomes.push(...evaluateRules(
+      rules.filter((rule) => !evaluatedRuleIds.has(rule.id)),
+      execution.events,
+    ));
     await writer.writeTranscript(execution, ruleOutcomes);
 
     step = "final_snapshot";

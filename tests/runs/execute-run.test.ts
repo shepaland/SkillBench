@@ -53,11 +53,14 @@ interface RunOverrides {
 
 async function createHarness(
   prepare: (project: TempProject) => Promise<void> = () => Promise.resolve(),
+  options: { readonly allowIssues?: boolean } = {},
 ): Promise<Harness> {
   const project = await createTempProject();
   await prepare(project);
   const catalog = await loadCatalog(project.root);
-  assert.deepEqual(catalog.issues, []);
+  if (options.allowIssues !== true) {
+    assert.deepEqual(catalog.issues, []);
+  }
   const catalogCase = catalog.cases[0];
   const variant = catalog.variants.find((candidate) => candidate.manifest.id === "example");
   assert.ok(catalogCase !== undefined && variant !== undefined);
@@ -501,6 +504,92 @@ test("evaluates an unreferenced rule after the session closes", async () => {
   );
 });
 
+test("grades a rule whose continuation is declared on the final step exactly once", async () => {
+  // Nothing forbids a continuation on the last prompt step, and the after-session
+  // sweep must not evaluate such a rule a second time over a wider window: the file
+  // change here happens before the continuation point, so a single evaluation fails
+  // the rule, while a second one would append a duplicate outcome.
+  const result = await runWithScript({
+    transcriptRules: [{ id: "stopped", check: "no_file_change" }],
+    assertions: [
+      { id: "A1", dimension: "functional", critical: true },
+      { id: "A2", dimension: "process", critical: false, transcriptRuleId: "stopped" },
+    ],
+    promptSteps: [
+      { id: "s1", prompt: "ask first" },
+      { id: "s2", prompt: "now do it", continuation: { eventRuleIds: ["stopped"] } },
+    ],
+    scriptSteps: [
+      { stepId: "s1", events: [] },
+      { stepId: "s2", events: [{ type: "file_change", afterMs: 1, paths: ["src/a.js"], outsidePaths: [] }] },
+    ],
+  });
+
+  assert.equal(result.transcriptRuleOutcomes.length, 1);
+  const graded = result.assertions.find((assertion) => assertion.assertionId === "A2");
+  assert.equal(graded?.outcome, "failed");
+});
+
+test("evaluates a gated rule whose continuation point was never reached", async () => {
+  // The runtime ended the session after the first step, so no continuation ever fired.
+  // The gated rule must still be evaluated over the full transcript at session close;
+  // leaving it out reports a correct run as an error on the assertion it grades.
+  const endedEarly: RuntimeAdapter = {
+    execute: () => Promise.resolve({
+      ...closedSession,
+      events: [
+        { type: "session_started", atMs: 0 },
+        { type: "prompt_sent", atMs: 1, stepId: "s1", text: "ask first" },
+        { type: "assistant_message", atMs: 2, text: "here is my plan" },
+        { type: "session_closed", atMs: 3 },
+      ],
+    }),
+  };
+
+  const result = await runWithScript({
+    adapter: endedEarly,
+    transcriptRules: [{ id: "spoke", check: "assistant_message" }],
+    assertions: [
+      { id: "A1", dimension: "functional", critical: true },
+      { id: "A2", dimension: "process", critical: false, transcriptRuleId: "spoke" },
+    ],
+    promptSteps: [
+      { id: "s1", prompt: "ask first", continuation: { eventRuleIds: ["spoke"] } },
+      { id: "s2", prompt: "now do it" },
+    ],
+  });
+
+  assert.deepEqual(
+    result.transcriptRuleOutcomes.map((outcome) => [outcome.ruleId, outcome.satisfied]),
+    [["spoke", true]],
+  );
+  const graded = result.assertions.find((assertion) => assertion.assertionId === "A2");
+  assert.equal(graded?.outcome, "passed");
+  assert.equal(result.status, "completed");
+});
+
+test("reports a transcript assertion as an error when its rule was never evaluated", async () => {
+  // Defensive path: catalog validation rejects an assertion naming an undeclared rule,
+  // so only a bypassed validation can bring this shape here. Every declared rule is
+  // covered by the after-session sweep, so a declared rule can no longer land here.
+  const result = await runWithScript({
+    allowCatalogIssues: true,
+    transcriptRules: [{ id: "spoke", check: "assistant_message" }],
+    assertions: [
+      { id: "A1", dimension: "functional", critical: true },
+      { id: "A2", dimension: "process", critical: false, transcriptRuleId: "ghost" },
+    ],
+    promptSteps: [{ id: "s1", prompt: "go" }],
+    scriptSteps: [{ stepId: "s1", events: [] }],
+  });
+
+  const graded = result.assertions.find((assertion) => assertion.assertionId === "A2");
+  assert.equal(graded?.outcome, "error");
+  assert.equal(graded.source, "transcript");
+  assert.match(graded.detail, /transcript rule ghost was never evaluated/u);
+  assert.equal(result.status, "completed");
+});
+
 test("reads the exhaustion cause from the adapter instead of guessing", async () => {
   const result = await runWithScript({ exhaustion: "wall_clock" });
   assert.equal(result.status, "exhausted");
@@ -533,6 +622,10 @@ interface ScriptCase {
   readonly scriptSteps?: readonly FakeScriptStep[];
   readonly exhaustion?: ExhaustionCause | null;
   readonly usage?: { readonly inputTokens: number; readonly outputTokens: number } | null;
+  /** Replaces the scripted fake adapter, for cases that need a runtime the fake cannot express. */
+  readonly adapter?: RuntimeAdapter;
+  /** Allows a deliberately invalid case manifest through catalog loading. */
+  readonly allowCatalogIssues?: boolean;
 }
 
 /**
@@ -555,7 +648,7 @@ async function runWithScript(script: ScriptCase): Promise<RunResult & { readonly
       };
       await writeJson(project.caseManifestPath, manifest);
     }
-  });
+  }, script.allowCatalogIssues === true ? { allowIssues: true } : {});
 
   const scriptSteps = script.scriptSteps ??
     harness.catalogCase.manifest.promptSteps.map((step) => ({ stepId: step.id, events: [] }));
@@ -567,7 +660,7 @@ async function runWithScript(script: ScriptCase): Promise<RunResult & { readonly
     metadata: { runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
     exhaustion: script.exhaustion ?? null,
   };
-  const adapter = new FakeAdapter(fakeScript);
+  const adapter = script.adapter ?? new FakeAdapter(fakeScript);
 
   const runId = createRunId(new Date(), defaultRunIdSuffix());
   const result = await executeRun(await runInput(harness, runId, { adapter }));
