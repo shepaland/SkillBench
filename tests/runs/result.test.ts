@@ -63,7 +63,7 @@ test("appendRawLine serializes many rapid calls into one ordered file and flushR
   // previous one has necessarily settled. Without the internal promise-queue
   // serialization, concurrent appendFile calls could interleave or drop lines.
   for (const line of lines) {
-    writer.appendRawLine("s1", line);
+    writer.appendRawLine("s1", line, "stdout");
   }
   const failures = await writer.flushRawLines();
 

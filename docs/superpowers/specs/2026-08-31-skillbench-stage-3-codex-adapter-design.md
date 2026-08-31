@@ -379,7 +379,13 @@ runs/<case>/<variant>/<run-id>/
   changes.json
   result.json
   raw/step-<step-id>.jsonl
+  raw/step-<step-id>.err.log
 ```
+
+The child's standard output and its error output are preserved in separate files. Both
+count against the output budget, and the error output is where a rejected model, an
+expired login, or an option this runtime version does not accept is explained; mixing
+plain text into the JSON Lines file would corrupt it.
 
 `transcript.json` additionally records, per step, the raw file name, the count of
 unparsed lines, and the rule outcomes evaluated at that step's continuation point.

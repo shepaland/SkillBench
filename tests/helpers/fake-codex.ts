@@ -5,6 +5,8 @@ import { join } from "node:path";
 export interface FakeCodexStep {
   /** Lines printed to stdout, in order. */
   readonly lines: readonly string[];
+  /** Lines printed to stderr, in order, the way a runtime reports a rejected option. */
+  readonly stderrLines?: readonly string[];
   /** Milliseconds to stay alive after printing, before exiting. */
   readonly lingerMs?: number;
   readonly exitCode?: number;
@@ -65,6 +67,7 @@ process.stdin.on("end", () => {
     process.stdout.write(JSON.stringify({ type: "env.probe", key, value: process.env[key] ?? null }) + "\\n");
   }
   for (const line of step.lines) process.stdout.write(line + "\\n");
+  for (const line of step.stderrLines ?? []) process.stderr.write(line + "\\n");
   if (step.trailingPartial !== undefined) process.stdout.write(step.trailingPartial);
   if (step.spawnGrandchildMs) {
     const grandchild = spawn(

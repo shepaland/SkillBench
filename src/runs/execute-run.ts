@@ -115,7 +115,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
         ruleOutcomes.push(...evaluateRules(gated, events));
         return Promise.resolve();
       },
-      onRawLine: (stepId, line) => { writer.appendRawLine(stepId, line); },
+      onRawLine: (stepId, line, stream) => { writer.appendRawLine(stepId, line, stream); },
     });
     // Every rule still without an outcome is evaluated here, over the full transcript:
     // rules no continuation references, and gated rules whose continuation point was

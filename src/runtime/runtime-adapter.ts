@@ -2,6 +2,9 @@ import type { PromptStep, RuntimeLimits } from "../domain/model.js";
 
 export type ExhaustionCause = "wall_clock" | "output_bytes" | "token_limit" | "signal";
 
+/** Which of the runtime's streams a raw line came from. */
+export type RawStream = "stdout" | "stderr";
+
 export type TranscriptEvent =
   | { readonly type: "session_started"; readonly atMs: number }
   | { readonly type: "prompt_sent"; readonly atMs: number; readonly stepId: string; readonly text: string }
@@ -24,7 +27,7 @@ export interface RuntimeInput {
   };
   readonly onContinuation: (step: PromptStep, events: readonly TranscriptEvent[]) => Promise<void>;
   /** Called for every raw stream line before parsing. Adapters without a stream never call it. */
-  readonly onRawLine?: (stepId: string, line: string) => void;
+  readonly onRawLine?: (stepId: string, line: string, stream: RawStream) => void;
 }
 
 export interface RuntimeExecution {

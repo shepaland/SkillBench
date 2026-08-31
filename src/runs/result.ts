@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { FrozenRunManifest } from "../domain/model.js";
 import type { AssertionResult } from "../oracles/run-oracle.js";
 import type { ProjectPaths } from "../paths/project-paths.js";
-import type { RuntimeExecution } from "../runtime/runtime-adapter.js";
+import type { RawStream, RuntimeExecution } from "../runtime/runtime-adapter.js";
 import type { ImmutableJsonStore } from "../storage/immutable-json-store.js";
 import { runDirectory } from "./freeze-inputs.js";
 import type { ChangePathObservations, ChangeSet } from "./snapshot.js";
@@ -62,11 +62,16 @@ export class RunEvidenceWriter {
     this.directory = runDirectory(manifest);
   }
 
-  /** Queues one raw runtime line, written before parsing so a parser defect cannot destroy it. */
-  public appendRawLine(stepId: string, line: string): void {
+  /**
+   * Queues one raw runtime line, written before parsing so a parser defect cannot
+   * destroy it. Each stream gets its own file: the JSON stream stays valid JSON Lines,
+   * and plain diagnostics stay readable and attributable next to it.
+   */
+  public appendRawLine(stepId: string, line: string, stream: RawStream): void {
+    const filename = stream === "stderr" ? `step-${stepId}.err.log` : `step-${stepId}.jsonl`;
     this.rawQueue = this.rawQueue
       .then(async () => {
-        const path = await this.paths.resolveOutput(`${this.directory}/raw/step-${stepId}.jsonl`);
+        const path = await this.paths.resolveOutput(`${this.directory}/raw/${filename}`);
         await mkdir(dirname(path), { recursive: true });
         await appendFile(path, `${line}\n`, "utf8");
       })

@@ -240,7 +240,7 @@ test("a raw line delivered through onRawLine reaches its evidence file", async (
   const harness = await createHarness();
   const rawLineAdapter: RuntimeAdapter = {
     execute: (input) => {
-      input.onRawLine?.("s1", '{"event":"raw"}');
+      input.onRawLine?.("s1", '{"event":"raw"}', "stdout");
       return Promise.resolve(closedSession);
     },
   };
@@ -253,13 +253,33 @@ test("a raw line delivered through onRawLine reaches its evidence file", async (
   assert.equal(written, '{"event":"raw"}\n');
 });
 
+test("a stderr line reaches its own evidence file, distinct from the JSON stream", async () => {
+  const harness = await createHarness();
+  const noisyAdapter: RuntimeAdapter = {
+    execute: (input) => {
+      input.onRawLine?.("s1", '{"event":"raw"}', "stdout");
+      input.onRawLine?.("s1", "error: unsupported model", "stderr");
+      return Promise.resolve(closedSession);
+    },
+  };
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e1", { adapter: noisyAdapter }));
+
+  assert.equal(result.status, "completed");
+  const directory = join(harness.project.root, "runs/F01/example/20260830T175302Z-a1b2e1");
+  // The plain-text diagnostic is kept out of the JSON Lines file, which would no
+  // longer parse if the two streams shared one file.
+  assert.equal(await readFile(join(directory, "raw/step-s1.jsonl"), "utf8"), '{"event":"raw"}\n');
+  assert.equal(await readFile(join(directory, "raw/step-s1.err.log"), "utf8"), "error: unsupported model\n");
+});
+
 test("a raw write failure is recorded in cleanupFailures without changing the run outcome", async () => {
   const harness = await createHarness();
   // A NUL byte makes ProjectPaths#resolveOutput reject the path inside appendRawLine's
   // queued write, without touching filesystem permissions.
   const badRawLineAdapter: RuntimeAdapter = {
     execute: (input) => {
-      input.onRawLine?.("s1\0bad", '{"event":"raw"}');
+      input.onRawLine?.("s1\0bad", '{"event":"raw"}', "stdout");
       return Promise.resolve(closedSession);
     },
   };

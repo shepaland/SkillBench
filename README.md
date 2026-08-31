@@ -134,7 +134,8 @@ Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/`:
 | `transcript.json` | The events, process result, and token usage reported by the runtime, plus the outcome of every declared transcript rule as one list. A rule named by a step's continuation was evaluated at that continuation point; the file does not group outcomes by step. |
 | `changes.json` | The files the agent added, changed, or removed, and whether any change fell outside the allowed paths. |
 | `result.json` | The run status, the outcome of each assertion, and the run's costs. |
-| `raw/step-<step-id>.jsonl` | Every line the runtime printed for that step, written before anything parses it. Only written by a runtime that produces a stream, such as Codex; the fake runtime writes no `raw/` directory. |
+| `raw/step-<step-id>.jsonl` | Every line the runtime printed for that step on its standard output, written before anything parses it. Only written by a runtime that produces a stream, such as Codex; the fake runtime writes no `raw/` directory. |
+| `raw/step-<step-id>.err.log` | Every line the runtime printed for that step on its error output, kept in a separate file so the stream above stays valid JSON Lines. This is where a rejected model, an expired login, or an unaccepted option is explained. Written only when the runtime printed something there. |
 
 ### Run statuses
 
@@ -389,7 +390,8 @@ SKILLBENCH_LIVE=1 npm run smoke:codex
 | `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения, а также результат каждого заявленного правила диалога одним списком. Правило, названное условием продолжения шага, оценивалось в этой точке продолжения; файл не группирует результаты по шагам. |
 | `changes.json` | Файлы, которые агент добавил, изменил или удалил, и попало ли какое-либо изменение за пределы разрешённых путей. |
 | `result.json` | Статус запуска, результат каждой проверки-утверждения и затраты на запуск. |
-| `raw/step-<step-id>.jsonl` | Каждая строка, которую среда выполнения напечатала для этого шага, записанная до того, как её что-либо разобрало. Записывается только средой выполнения, которая выдаёт поток данных, например Codex; фиктивная среда выполнения каталог `raw/` не создаёт. |
+| `raw/step-<step-id>.jsonl` | Каждая строка, которую среда выполнения напечатала для этого шага в стандартный вывод, записанная до того, как её что-либо разобрало. Записывается только средой выполнения, которая выдаёт поток данных, например Codex; фиктивная среда выполнения каталог `raw/` не создаёт. |
+| `raw/step-<step-id>.err.log` | Каждая строка, которую среда выполнения напечатала для этого шага в поток ошибок; хранится в отдельном файле, чтобы поток выше оставался корректным JSON Lines. Именно здесь объясняются отклонённая модель, истёкший вход или непринятый параметр. Записывается, только если среда выполнения что-то туда напечатала. |
 
 ### Статусы запуска
 

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { DependencyError } from "../../domain/errors.js";
 import type {
   ExhaustionCause,
+  RawStream,
   RuntimeAdapter,
   RuntimeExecution,
   RuntimeInput,
@@ -172,7 +173,7 @@ export class CodexAdapter implements RuntimeAdapter {
     readonly timeoutMs: number;
     readonly atMs: () => number;
     readonly onEvent: (event: TranscriptEvent) => void;
-    readonly onRawLine?: (stepId: string, line: string) => void;
+    readonly onRawLine?: (stepId: string, line: string, stream: RawStream) => void;
   }): Promise<StepResult> {
     const killGraceMs = this.options.killGraceMs ?? 5000;
 
@@ -186,11 +187,31 @@ export class CodexAdapter implements RuntimeAdapter {
 
       let bytes = 0;
       let unparsed = 0;
-      let buffer = "";
       let threadId: string | null = null;
       let usage: { readonly inputTokens: number; readonly outputTokens: number } | null = null;
       let stopped: ExhaustionCause | null = null;
       let settled = false;
+
+      // One splitter per stream, so every line is attributed to the stream it came
+      // from and the two never interleave into one another's partial line.
+      const stdoutLines = splitLines((line) => {
+        if (line === "") return;
+        options.onRawLine?.(options.stepId, line, "stdout");
+        const parsed = parseCodexLine(line, { atMs: options.atMs(), workspace: options.workspace });
+        if (!parsed.recognized) unparsed += 1;
+        for (const event of parsed.events) options.onEvent(event);
+        threadId = parsed.threadId ?? threadId;
+        usage = parsed.usage ?? usage;
+      });
+
+      // The child's diagnostics are the only evidence of a rejected model, a failed
+      // login, or an option this runtime version no longer accepts. They are not part
+      // of the JSON stream, so they are never parsed and never counted as unparsed —
+      // but they are preserved, tagged as their own stream.
+      const stderrLines = splitLines((line) => {
+        if (line === "") return;
+        options.onRawLine?.(options.stepId, line, "stderr");
+      });
 
       // A process that exits before draining stdin (a rejected flag, an auth
       // failure, a prompt larger than the pipe buffer) makes the write end emit
@@ -214,7 +235,8 @@ export class CodexAdapter implements RuntimeAdapter {
         settled = true;
         clearTimeout(timer);
         // A stream cut mid-line still becomes evidence: it is counted, never dropped.
-        handleLine(buffer);
+        stdoutLines.flush();
+        stderrLines.flush();
         const result = Object.freeze({
           exitCode, signal: exitSignal, threadId, usage,
           unparsedLines: unparsed, bytes, stopped,
@@ -229,16 +251,6 @@ export class CodexAdapter implements RuntimeAdapter {
         resolve(result);
       };
 
-      const handleLine = (line: string): void => {
-        if (line === "") return;
-        options.onRawLine?.(options.stepId, line);
-        const parsed = parseCodexLine(line, { atMs: options.atMs(), workspace: options.workspace });
-        if (!parsed.recognized) unparsed += 1;
-        for (const event of parsed.events) options.onEvent(event);
-        threadId = parsed.threadId ?? threadId;
-        usage = parsed.usage ?? usage;
-      };
-
       const count = (chunk: Buffer): void => {
         bytes += chunk.byteLength;
         if (bytes > options.remainingBytes) stop("output_bytes");
@@ -247,16 +259,13 @@ export class CodexAdapter implements RuntimeAdapter {
       const timer = setTimeout(() => { stop("wall_clock"); }, options.timeoutMs);
       timer.unref();
 
-      child.stderr.on("data", count);
+      child.stderr.on("data", (chunk: Buffer) => {
+        count(chunk);
+        stderrLines.push(chunk);
+      });
       child.stdout.on("data", (chunk: Buffer) => {
         count(chunk);
-        buffer += chunk.toString("utf8");
-        for (;;) {
-          const newline = buffer.indexOf("\n");
-          if (newline === -1) break;
-          handleLine(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-        }
+        stdoutLines.push(chunk);
       });
 
       child.once("error", (error: Error) => {
@@ -286,6 +295,32 @@ export class CodexAdapter implements RuntimeAdapter {
       child.stdin.end(options.prompt, "utf8");
     });
   }
+}
+
+interface LineSplitter {
+  push(chunk: Buffer): void;
+  /** Emits whatever is left, including a line the stream cut before its newline. */
+  flush(): void;
+}
+
+function splitLines(emit: (line: string) => void): LineSplitter {
+  let pending = "";
+  return {
+    push(chunk: Buffer): void {
+      pending += chunk.toString("utf8");
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline === -1) break;
+        emit(pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+      }
+    },
+    flush(): void {
+      const leftover = pending;
+      pending = "";
+      emit(leftover);
+    },
+  };
 }
 
 function errorMessage(error: unknown): string {

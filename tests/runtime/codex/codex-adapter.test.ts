@@ -149,6 +149,28 @@ test("counts an unparsed line without failing the run", async () => {
   assert.ok(execution.events.some((event) => event.type === "completion_claim"));
 });
 
+test("preserves the child's stderr as evidence, tagged as its own stream", async () => {
+  // When a live step fails because the model was rejected, the login expired, or an
+  // option this runtime version no longer accepts was passed, the child says so on
+  // stderr and nowhere else. Counting those bytes against the output budget and then
+  // discarding them would leave the operator with only "exited with code N".
+  const seen: { readonly stream: string; readonly line: string }[] = [];
+  const { execution } = await run(
+    [{ lines: [threadLine("t-1"), usageLine(1, 1)], stderrLines: ["error: unsupported model"] }],
+    {},
+    [{ id: "s1", prompt: "go" }],
+    { onRawLine: (_stepId, line, stream) => seen.push({ stream, line }) },
+  );
+
+  assert.deepEqual(
+    seen.filter((entry) => entry.stream === "stderr").map((entry) => entry.line),
+    ["error: unsupported model"],
+  );
+  assert.ok(seen.some((entry) => entry.stream === "stdout"));
+  // Diagnostics are not part of the JSON stream, so they are never counted as unparsed.
+  assert.equal(execution.unparsedLines, 0);
+});
+
 test("survives a stream truncated mid-line", async () => {
   // The trailing content has no newline, so it never reaches the ordinary
   // per-line handler in the 'data' listener; it can only be observed through
