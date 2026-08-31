@@ -5,6 +5,13 @@ import { DependencyError } from "../../domain/errors.js";
 
 const credentialFilename = "auth.json";
 
+export interface CodexHomeFileSystem {
+  rm(path: string, options: { readonly recursive: boolean; readonly force: boolean }): Promise<void>;
+}
+
+/** The removal `cleanup` performs. Replaceable so tests can exercise a removal failure. */
+export const codexHomeFileSystem: CodexHomeFileSystem = { rm };
+
 export interface CodexHomeOptions {
   /** The operator's real runtime home. Defaults to `~/.codex`. */
   readonly sourceHome?: string;
@@ -40,7 +47,7 @@ export class CodexHome {
   public async cleanup(): Promise<void> {
     if (this.removed) return;
     this.removed = true;
-    await rm(this.path, { recursive: true, force: true });
+    await codexHomeFileSystem.rm(this.path, { recursive: true, force: true });
   }
 }
 

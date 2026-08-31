@@ -37,6 +37,8 @@ export interface RuntimeExecution {
   readonly exhaustion: ExhaustionCause | null;
   /** Stream lines this adapter did not recognize. Never fatal; preserved in raw evidence. */
   readonly unparsedLines: number;
+  /** Cleanup the adapter could not complete. Recorded beside the run outcome, never in place of it. */
+  readonly cleanupFailures?: readonly string[];
 }
 
 export interface RuntimeAdapter {

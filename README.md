@@ -102,7 +102,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 - Codex already logged in, so a credential file exists in its runtime home;
 - the case's sandbox mode to be one of the names Codex accepts (`read-only`, `workspace-write`, or `danger-full-access`).
 
-Each run gets its own private, temporary runtime home directory, built fresh for that run. Only the credential file is copied into it; the operator's personal Codex configuration — its settings, its saved sessions, its installed skill packages — is never copied and never read. This keeps two things true: a benchmark run cannot see or resume another run's session, and personal configuration on the machine running the benchmark cannot skew a measured result. The temporary home is deleted once the run finishes.
+Each run gets its own private, temporary runtime home directory, built fresh for that run. Only the credential file is copied into it; the operator's personal Codex configuration — its settings, its saved sessions, its installed skill packages — is never copied and never read. This keeps two things true: a benchmark run cannot see or resume another run's session, and personal configuration on the machine running the benchmark cannot skew a measured result. The temporary home is deleted once the run finishes; if it cannot be deleted, the run records that in its cleanup failures and keeps its own outcome.
 
 The child Codex process does not inherit the parent shell's environment. It receives only a small, explicit set of variables plus whatever the variant manifest declares safe.
 
@@ -357,7 +357,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 - уже выполненный вход в Codex, чтобы в его домашнем каталоге среды выполнения существовал файл учётных данных;
 - режим песочницы кейса, совпадающий с одним из имён, которые принимает Codex (`read-only`, `workspace-write` или `danger-full-access`).
 
-Каждый запуск получает свой собственный закрытый временный домашний каталог среды выполнения, созданный заново для этого запуска. В него копируется только файл учётных данных; личные настройки Codex — параметры, сохранённые сессии, установленные пакеты скиллов — никогда не копируются и не читаются. Это сохраняет два свойства: один запуск не может увидеть или продолжить сессию другого запуска, а личные настройки на машине, где идёт бенчмарк, не могут повлиять на результат измерения. Временный домашний каталог удаляется сразу после завершения запуска.
+Каждый запуск получает свой собственный закрытый временный домашний каталог среды выполнения, созданный заново для этого запуска. В него копируется только файл учётных данных; личные настройки Codex — параметры, сохранённые сессии, установленные пакеты скиллов — никогда не копируются и не читаются. Это сохраняет два свойства: один запуск не может увидеть или продолжить сессию другого запуска, а личные настройки на машине, где идёт бенчмарк, не могут повлиять на результат измерения. Временный домашний каталог удаляется сразу после завершения запуска; если удалить его не удалось, запуск записывает это в список сбоев очистки и сохраняет собственный результат.
 
 Дочерний процесс Codex не наследует окружение родительской оболочки целиком. Он получает только небольшой явный набор переменных плюс те переменные, которые манифест варианта объявил безопасными.
 

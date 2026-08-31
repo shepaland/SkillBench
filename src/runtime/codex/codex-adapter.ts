@@ -65,6 +65,7 @@ export class CodexAdapter implements RuntimeAdapter {
     let exhaustion: ExhaustionCause | null = null;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
+    const cleanupFailures: string[] = [];
 
     try {
       for (const [index, step] of input.promptSteps.entries()) {
@@ -132,7 +133,14 @@ export class CodexAdapter implements RuntimeAdapter {
         }
       }
     } finally {
-      await home.cleanup();
+      try {
+        await home.cleanup();
+      } catch (error: unknown) {
+        // A home that cannot be removed is evidence, not an outcome. Throwing here
+        // would discard a completed run's transcript, which the core writes only
+        // after `execute` returns, and would mask the original error on a failure path.
+        cleanupFailures.push(`codex home ${home.path}: ${errorMessage(error)}`);
+      }
     }
 
     events.push(Object.freeze({ type: "session_closed" as const, atMs: atMs() }));
@@ -144,6 +152,7 @@ export class CodexAdapter implements RuntimeAdapter {
       elapsedMs: atMs(),
       exhaustion,
       unparsedLines,
+      cleanupFailures: Object.freeze([...cleanupFailures]),
       metadata: Object.freeze({
         runtime: "codex",
         runtimeVersion: this.options.runtimeVersion,
@@ -277,6 +286,10 @@ export class CodexAdapter implements RuntimeAdapter {
       child.stdin.end(options.prompt, "utf8");
     });
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function buildEnvironment(

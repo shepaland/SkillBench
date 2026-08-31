@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { PromptStep } from "../../../src/domain/model.js";
 import { CodexAdapter } from "../../../src/runtime/codex/codex-adapter.js";
+import { codexHomeFileSystem } from "../../../src/runtime/codex/codex-home.js";
 import type { RuntimeExecution, RuntimeInput } from "../../../src/runtime/runtime-adapter.js";
 import {
   changeLine,
@@ -230,6 +231,33 @@ test("does not hang when a grandchild keeps stdout open after the child exits", 
 
   assert.equal(execution.exhaustion, null);
   assert.ok(execution.elapsedMs < 2000, `expected an early resolve, got elapsedMs=${String(execution.elapsedMs)}`);
+});
+
+test("records a home removal failure without replacing the run outcome", async () => {
+  // The run itself succeeds; only the removal of its private runtime home fails. The
+  // outcome, the transcript, and the process result must all survive that, because the
+  // core writes transcript.json only after execute() returns.
+  const original = codexHomeFileSystem.rm;
+  codexHomeFileSystem.rm = async (path, options): Promise<void> => {
+    // Remove it for real first, so the test leaves nothing behind, then fail.
+    await original(path, options);
+    throw new Error("home is busy");
+  };
+
+  try {
+    const { execution } = await run(
+      [{ lines: [threadLine("t-1"), usageLine(1, 1)] }],
+      {},
+      [{ id: "s1", prompt: "go" }],
+    );
+
+    assert.equal(execution.process.exitCode, 0);
+    assert.equal(execution.events.at(-1)?.type, "session_closed");
+    assert.equal(execution.cleanupFailures?.length, 1);
+    assert.match(execution.cleanupFailures?.[0] ?? "", /^codex home .+: home is busy$/u);
+  } finally {
+    codexHomeFileSystem.rm = original;
+  }
 });
 
 test("does not let a declared variable override the run's own isolation", async () => {

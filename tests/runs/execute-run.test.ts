@@ -271,6 +271,22 @@ test("a raw write failure is recorded in cleanupFailures without changing the ru
   assert.ok(result.cleanupFailures.some((failure) => failure.startsWith("raw evidence:")));
 });
 
+test("an adapter cleanup failure is recorded without changing the run outcome", async () => {
+  const harness = await createHarness();
+  const untidyAdapter: RuntimeAdapter = {
+    execute: () => Promise.resolve({
+      ...closedSession,
+      cleanupFailures: ["codex home /tmp/skillbench-codex-home-x: home is busy"],
+    }),
+  };
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e0", { adapter: untidyAdapter }));
+
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.assertions.map((assertion) => assertion.outcome), ["passed"]);
+  assert.deepEqual(result.cleanupFailures, ["codex home /tmp/skillbench-codex-home-x: home is busy"]);
+});
+
 test("an adapter failure reports errored at the execute step", async () => {
   const harness = await createHarness();
   const brokenAdapter: RuntimeAdapter = {

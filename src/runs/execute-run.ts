@@ -182,6 +182,9 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     for (const failure of await writer.flushRawLines()) {
       cleanupFailures.push(`raw evidence: ${failure}`);
     }
+    // Cleanup the adapter could not complete is recorded like any other cleanup
+    // failure: it belongs beside the run outcome, never in place of it.
+    cleanupFailures.push(...execution?.cleanupFailures ?? []);
     const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
     if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
     if (input.keepWorkspace === true) {
