@@ -28,6 +28,8 @@ const closedSession: RuntimeExecution = {
   usage: null,
   elapsedMs: 1,
   metadata: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+  exhaustion: null,
+  unparsedLines: 0,
 };
 
 interface Harness {

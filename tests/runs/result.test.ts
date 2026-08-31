@@ -86,6 +86,8 @@ test("writes transcript, changes, and result as separate records", async () => {
     usage: { inputTokens: 10, outputTokens: 20 },
     elapsedMs: 30,
     metadata: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+    exhaustion: null,
+    unparsedLines: 0,
   });
   await writer.writeChanges(result.changes, result.changePathObservations);
   await writer.writeResult(result);

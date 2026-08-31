@@ -103,6 +103,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
         reasoningEffort: input.configuration.reasoningEffort,
         sandbox: input.configuration.sandbox,
         limits: input.catalogCase.manifest.limits,
+        environment: input.variant.manifest.environment,
       },
       onContinuation: async () => {},
     });

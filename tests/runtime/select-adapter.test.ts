@@ -40,6 +40,7 @@ test("the fake runtime produces a deterministic transcript for every prompt step
       reasoningEffort: "medium",
       sandbox: "workspace-write",
       limits: caseManifest.limits,
+      environment: {},
     },
     onContinuation: async () => {},
   };

@@ -1,9 +1,10 @@
 import type { PromptStep } from "../domain/model.js";
-import type { RuntimeAdapter, RuntimeExecution, RuntimeInput, TranscriptEvent } from "./runtime-adapter.js";
+import type { ExhaustionCause, RuntimeAdapter, RuntimeExecution, RuntimeInput, TranscriptEvent } from "./runtime-adapter.js";
 
 export type FakeStepEvent =
   | { readonly type: "assistant_message"; readonly afterMs: number; readonly text: string }
   | { readonly type: "command"; readonly afterMs: number; readonly executor: string; readonly args: readonly string[]; readonly exitCode: number }
+  | { readonly type: "file_change"; readonly afterMs: number; readonly paths: readonly string[]; readonly outsidePaths: readonly string[] }
   | { readonly type: "completion_claim"; readonly afterMs: number; readonly text: string };
 
 export interface FakeScriptStep {
@@ -17,6 +18,7 @@ export interface FakeScript {
   readonly process: { readonly exitCode: number | null; readonly signal: NodeJS.Signals | null; readonly timedOut: boolean };
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number } | null;
   readonly metadata: { readonly runtimeVersion: string; readonly adapterVersion: string };
+  readonly exhaustion?: ExhaustionCause | null;
 }
 
 export class FakeAdapter implements RuntimeAdapter {
@@ -57,7 +59,9 @@ export class FakeAdapter implements RuntimeAdapter {
         runtime: "fake",
         runtimeVersion: this.script.metadata.runtimeVersion,
         adapterVersion: this.script.metadata.adapterVersion
-      })
+      }),
+      exhaustion: this.script.exhaustion ?? null,
+      unparsedLines: 0
     });
   }
 }
@@ -88,6 +92,8 @@ function toTranscriptEvent(event: FakeStepEvent, atMs: number): TranscriptEvent 
       return freezeEvent({ type: "assistant_message", atMs, text: event.text });
     case "command":
       return freezeEvent({ type: "command", atMs, executor: event.executor, args: [...event.args], exitCode: event.exitCode });
+    case "file_change":
+      return freezeEvent({ type: "file_change", atMs, paths: [...event.paths], outsidePaths: [...event.outsidePaths] });
     case "completion_claim":
       return freezeEvent({ type: "completion_claim", atMs, text: event.text });
   }
@@ -96,6 +102,13 @@ function toTranscriptEvent(event: FakeStepEvent, atMs: number): TranscriptEvent 
 function freezeEvent(event: TranscriptEvent): TranscriptEvent {
   if (event.type === "command") {
     return Object.freeze({ ...event, args: Object.freeze([...event.args]) });
+  }
+  if (event.type === "file_change") {
+    return Object.freeze({
+      ...event,
+      paths: Object.freeze([...event.paths]),
+      outsidePaths: Object.freeze([...event.outsidePaths]),
+    });
   }
   return Object.freeze({ ...event });
 }
