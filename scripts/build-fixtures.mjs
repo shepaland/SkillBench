@@ -14,16 +14,19 @@ async function main(argv) {
 
   for (const name of names) {
     const overlay = await readOverlay(options.root, name);
-    const composed = await compose(options.root, overlay);
-    if (options.check) {
-      await verify(options.root, overlay, composed);
-    } else {
-      const target = join(options.root, FIXTURES, overlay.target);
-      await rm(target, { recursive: true, force: true });
-      await cp(composed, target, { recursive: true, dereference: false, verbatimSymlinks: true });
-      process.stdout.write(`composed ${FIXTURES}/${overlay.target}\n`);
+    const { staging, composed } = await compose(options.root, overlay);
+    try {
+      if (options.check) {
+        await verify(options.root, overlay, composed);
+      } else {
+        const target = join(options.root, FIXTURES, overlay.target);
+        await rm(target, { recursive: true, force: true });
+        await cp(composed, target, { recursive: true, dereference: false, verbatimSymlinks: true });
+        process.stdout.write(`composed ${FIXTURES}/${overlay.target}\n`);
+      }
+    } finally {
+      await rm(staging, { recursive: true, force: true });
     }
-    await rm(composed, { recursive: true, force: true });
   }
   if (options.check) {
     process.stdout.write(`verified ${String(names.length)} composed fixtures\n`);
@@ -114,23 +117,28 @@ async function compose(root, overlay) {
   await assertNoSymbolicLinks(files, `overlay ${overlay.name}`);
 
   const staging = await mkdtemp(join(tmpdir(), "skillbench-compose-"));
-  const composed = join(staging, overlay.target);
-  await mkdir(composed, { recursive: true });
-  await cp(base, composed, { recursive: true, dereference: false, verbatimSymlinks: true });
+  try {
+    const composed = join(staging, overlay.target);
+    await mkdir(composed, { recursive: true });
+    await cp(base, composed, { recursive: true, dereference: false, verbatimSymlinks: true });
 
-  for (const removal of overlay.removals) {
-    assertInsideDirectory(composed, removal, `overlay ${overlay.name} removal`);
-  }
-  for (const removal of overlay.removals) {
-    const target = join(composed, removal);
-    if (!(await exists(target))) {
-      throw new Error(`overlay ${overlay.name} removes a path that the base does not have: ${removal}`);
+    for (const removal of overlay.removals) {
+      assertInsideDirectory(composed, removal, `overlay ${overlay.name} removal`);
     }
-    await rm(target, { recursive: true });
-  }
+    for (const removal of overlay.removals) {
+      const target = join(composed, removal);
+      if (!(await exists(target))) {
+        throw new Error(`overlay ${overlay.name} removes a path that the base does not have: ${removal}`);
+      }
+      await rm(target, { recursive: true });
+    }
 
-  await cp(files, composed, { recursive: true, dereference: false, verbatimSymlinks: true });
-  return composed;
+    await cp(files, composed, { recursive: true, dereference: false, verbatimSymlinks: true });
+    return { staging, composed };
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function verify(root, overlay, composed) {
