@@ -151,7 +151,7 @@ Two levels:
   directory and assert stdout, stderr, and exit code.
 
 Coverage is dense over documented behavior: every command, both output formats,
-and all five exit codes. Around twenty tests.
+and all five exit codes. 56 tests.
 
 ### Three deliberate coverage gaps
 
