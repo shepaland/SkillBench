@@ -62,7 +62,7 @@ node dist/src/cli.js validate --project . --public-only
 - `schemas/` contains the published case, variant, and oracle JSON Schemas; `src/schemas/` validates data against them.
 - `src/storage/` contains immutable JSON storage.
 - `src/runtime/` defines the adapter boundary and deterministic fake adapter; `src/runtime/select-adapter.ts` maps a runtime identifier to an adapter, asynchronously, and reports its runtime version.
-- `src/runtime/codex/` implements the `codex` runtime adapter: command construction (`build-command.ts`), stream parsing (`parse-events.ts`), reported-shell-command normalization (`normalize-command.ts`), and a per-run isolated runtime home (`codex-home.ts`).
+- `src/runtime/codex/` implements the `codex` runtime adapter: `codex-adapter.ts` is the `RuntimeAdapter` implementation itself, built from command construction (`build-command.ts`), stream parsing (`parse-events.ts`), reported-shell-command normalization (`normalize-command.ts`), a per-run isolated runtime home (`codex-home.ts`), and runtime version discovery (`codex-version.ts`).
 - `src/runs/transcript-rules.ts` evaluates typed transcript rules — a closed set of five checks — as a pure function of the recorded event list.
 - `src/catalog/` loads and cross-validates catalogs.
 - `src/commands/` and `src/cli/` implement CLI behavior.

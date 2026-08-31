@@ -96,7 +96,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 
 ### The Codex runtime
 
-`--runtime codex` runs the case against a real Codex session instead of the fake runtime. Using it requires:
+`--runtime codex` runs the case against a real Codex session instead of the fake runtime, on both `dry-run` and `run`. An installed runtime is enough for `dry-run --runtime codex` to freeze a plan, since that only asks the runtime for its version. Actually running a session with `run --runtime codex` requires more:
 
 - Codex installed and on the command-line search path;
 - Codex already logged in, so a credential file exists in its runtime home;
@@ -131,7 +131,7 @@ Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/`:
 | File | Contents |
 | --- | --- |
 | `manifest.json` | The frozen run inputs: case, variant, model, sandbox mode, limits, and content hashes. |
-| `transcript.json` | The events, process result, and token usage reported by the runtime, plus the rule outcomes evaluated at each step. |
+| `transcript.json` | The events, process result, and token usage reported by the runtime, plus the outcome of every declared transcript rule as one list. A rule named by a step's continuation was evaluated at that continuation point; the file does not group outcomes by step. |
 | `changes.json` | The files the agent added, changed, or removed, and whether any change fell outside the allowed paths. |
 | `result.json` | The run status, the outcome of each assertion, and the run's costs. |
 | `raw/step-<step-id>.jsonl` | Every line the runtime printed for that step, written before anything parses it. Only written by a runtime that produces a stream, such as Codex; the fake runtime writes no `raw/` directory. |
@@ -351,7 +351,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 
 ### Среда выполнения Codex
 
-Флаг `--runtime codex` запускает кейс в настоящей сессии Codex вместо фиктивной среды выполнения. Для этого нужны:
+Флаг `--runtime codex` запускает кейс в настоящей сессии Codex вместо фиктивной среды выполнения — и для `dry-run`, и для `run`. Чтобы `dry-run --runtime codex` зафиксировал план, достаточно установленной среды выполнения, потому что команда лишь спрашивает у неё версию. Чтобы по-настоящему выполнить сессию командой `run --runtime codex`, нужно больше:
 
 - установленный Codex, доступный в пути поиска команд;
 - уже выполненный вход в Codex, чтобы в его домашнем каталоге среды выполнения существовал файл учётных данных;
@@ -386,7 +386,7 @@ SKILLBENCH_LIVE=1 npm run smoke:codex
 | Файл | Содержимое |
 | --- | --- |
 | `manifest.json` | Зафиксированные входные данные запуска: кейс, вариант, модель, режим песочницы, лимиты и хеши содержимого. |
-| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения, а также результаты правил, проверенных на каждом шаге. |
+| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения, а также результат каждого заявленного правила диалога одним списком. Правило, названное условием продолжения шага, оценивалось в этой точке продолжения; файл не группирует результаты по шагам. |
 | `changes.json` | Файлы, которые агент добавил, изменил или удалил, и попало ли какое-либо изменение за пределы разрешённых путей. |
 | `result.json` | Статус запуска, результат каждой проверки-утверждения и затраты на запуск. |
 | `raw/step-<step-id>.jsonl` | Каждая строка, которую среда выполнения напечатала для этого шага, записанная до того, как её что-либо разобрало. Записывается только средой выполнения, которая выдаёт поток данных, например Codex; фиктивная среда выполнения каталог `raw/` не создаёт. |
