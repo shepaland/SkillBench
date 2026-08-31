@@ -1,0 +1,6 @@
+{
+  "baseFixture": "queuedesk",
+  "target": "queuedesk-tenant-leak",
+  "description": "Claim and complete find a job by identifier without checking which tenant owns it.",
+  "removals": []
+}

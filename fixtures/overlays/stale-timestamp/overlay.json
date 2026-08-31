@@ -1,0 +1,6 @@
+{
+  "baseFixture": "queuedesk",
+  "target": "queuedesk-stale-timestamp",
+  "description": "Claiming a job leaves updatedAt at its creation value.",
+  "removals": []
+}

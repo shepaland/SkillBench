@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "tenants": {
+    "acme": { "token": "acme-token", "role": "admin" },
+    "globex": { "token": "globex-token", "role": "worker" }
+  },
+  "jobs": [
+    {
+      "id": "job-0001",
+      "tenant": "acme",
+      "title": "Ship the release notes",
+      "priority": "normal",
+      "state": "queued",
+      "createdAt": "2026-01-01T09:00:00.000Z",
+      "updatedAt": "2026-01-01T09:00:00.000Z",
+      "note": null
+    },
+    {
+      "id": "job-0002",
+      "tenant": "acme",
+      "title": "Rotate the signing key",
+      "priority": "high",
+      "state": "queued",
+      "createdAt": "2026-01-01T09:05:00.000Z",
+      "updatedAt": "2026-01-01T09:05:00.000Z",
+      "note": null
+    },
+    {
+      "id": "job-0003",
+      "tenant": "globex",
+      "title": "Archive last quarter's exports",
+      "priority": "low",
+      "state": "queued",
+      "createdAt": "2026-01-01T09:10:00.000Z",
+      "updatedAt": "2026-01-01T09:10:00.000Z",
+      "note": null
+    }
+  ],
+  "nextId": 4
+}

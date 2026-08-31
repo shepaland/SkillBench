@@ -1,0 +1,6 @@
+{
+  "baseFixture": "queuedesk",
+  "target": "queuedesk-claim-order",
+  "description": "Ordering lives in the renderer, so claim hands out the oldest job instead of the most important one.",
+  "removals": []
+}
