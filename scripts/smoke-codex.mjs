@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,38 @@ if (process.env.SKILLBENCH_LIVE !== "1") {
   console.error("Refusing to start a live agent. Set SKILLBENCH_LIVE=1 to run this check.");
   process.exit(2);
 }
+
+// Last-resort default when SKILLBENCH_MODEL is unset and the operator's own
+// ~/.codex/config.toml (or $CODEX_HOME/config.toml) names no model either.
+// It is not guaranteed to be valid for every account: it exists only so the
+// script has something to try on a machine with no Codex configuration yet.
+const documentedFallbackModel = "gpt-5-codex";
+
+async function configuredModel() {
+  const configPath = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "config.toml");
+  let text;
+  try {
+    text = await readFile(configPath, "utf8");
+  } catch {
+    return null;
+  }
+  // TOML top-level keys only appear before the first [table] header, so stop
+  // looking once one is reached — nothing after it is a top-level "model".
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) {
+      break;
+    }
+    const match = /^model\s*=\s*"([^"]*)"/.exec(trimmed);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+const model = process.env.SKILLBENCH_MODEL ?? (await configuredModel()) ?? documentedFallbackModel;
+console.log(`model: ${model}`);
 
 // fileURLToPath, not .pathname: a repository path with non-ASCII characters
 // comes back percent-encoded from .pathname and resolves to nothing.
@@ -36,7 +68,7 @@ const result = spawnSync(process.execPath, [
   "--case", "SMOKE",
   "--variant", "control",
   "--runtime", "codex",
-  "--model", process.env.SKILLBENCH_MODEL ?? "gpt-5-codex",
+  "--model", model,
   "--reasoning", "low",
   "--sandbox", "workspace-write",
   "--runs", "1",

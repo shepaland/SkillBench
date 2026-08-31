@@ -197,6 +197,35 @@ test("--keep-workspace preserves the workspace and prints its path", async () =>
   await rm(dirname(printed), { recursive: true, force: true });
 });
 
+test("an oracle check with workingDirectory \".\" grades successfully against the fake runtime", async () => {
+  const project = await createTempProject();
+  // Placed at the oracle root itself (not under checks/) so that "." is the
+  // only path that can find it once the oracle is mounted into a grading area.
+  await writeFile(join(project.oracleDirectory, "root-check.js"), "process.exit(0);\n");
+  await writeJson(join(project.oracleDirectory, "oracle.json"), {
+    schemaVersion: 1,
+    caseId: "F01",
+    checks: [
+      {
+        assertionId: "assert-1",
+        command: { executor: "node", args: ["root-check.js"] },
+        workingDirectory: ".",
+        timeoutMs: 10_000,
+      },
+    ],
+  });
+  const { io, stdout } = createIo();
+
+  await runRun(options(project.root, { json: true }), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes());
+
+  const parsed = JSON.parse(stdout()) as { runs: { status: string; failedCriticalAssertions: string[] }[] };
+  assert.equal(parsed.runs.length, 1);
+  for (const entry of parsed.runs) {
+    assert.equal(entry.status, "completed");
+    assert.deepEqual(entry.failedCriticalAssertions, []);
+  }
+});
+
 test(
   "a run that cannot remove its grading area raises a dependency error",
   {
