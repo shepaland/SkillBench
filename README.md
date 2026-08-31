@@ -62,6 +62,10 @@ The `skillbench validate` command reads the project catalog and checks:
 
 The command prints every problem in a stable order. This makes local results and automated checks easier to compare.
 
+### QueueDesk fixture
+
+QueueDesk is a small offline job queue: a command-line tool that lets a team create, list, claim, and complete jobs by reading and writing one local JSON file, with no server and no external dependencies. `fixtures/queuedesk/` is the base project — the clean, working copy that agents will work on once benchmark cases point at it. `fixtures/queuedesk-<name>/` are composed copies, each carrying one seeded defect that a case is built around. These composed copies are built by `npm run fixtures:build` and their match against what that command would produce is checked by `npm run fixtures:check`; a composed copy is never edited by hand.
+
 ### `list`, `dry-run`, and `run`
 
 `list` prints the cases and variants defined in a project. Add `--json` to get the same information as a JSON document for scripts.
@@ -318,6 +322,10 @@ SkillBench проверяет данные для тестирования ко�
 - наличие закрытых оракулов, если не указан флаг `--public-only`.
 
 Команда выводит найденные проблемы в стабильном порядке. Поэтому локальный результат удобно сравнивать с результатом автоматической проверки.
+
+### Фикстура QueueDesk
+
+QueueDesk — небольшая офлайн-очередь задач: утилита командной строки, которая позволяет команде создавать, просматривать, забирать в работу и завершать задачи, читая и записывая один локальный JSON-файл, без сервера и без внешних зависимостей. `fixtures/queuedesk/` — базовый проект, чистая рабочая копия, с которой будут работать агенты, как только кейсы бенчмарка станут на неё ссылаться. `fixtures/queuedesk-<name>/` — собранные копии, в каждой — ровно один намеренный дефект, вокруг которого построен один из кейсов. Эти собранные копии создаёт команда `npm run fixtures:build`, а их соответствие тому, что построила бы эта команда, проверяет `npm run fixtures:check`; собранную копию никогда не редактируют вручную.
 
 ### `list`, `dry-run` и `run`
 

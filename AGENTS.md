@@ -15,14 +15,15 @@ The primary metric is `solve_rate`. Diagnostic metrics are `correctness`, `regre
 
 ## Current State
 
-- Stage 1, Stage 2A, Stage 2B, and Stage 3 are complete.
+- Stage 1, Stage 2A, Stage 2B, Stage 3, and Stage 4 are complete.
 - `validate`, `list`, `dry-run`, and `run` are implemented. `compare` and `report` remain reserved commands and currently return exit code `2`.
 - `validate` checks the catalog and, unless `--public-only` is used, loads each case's private oracle manifest and confirms it covers exactly the declared assertions without a `transcriptRuleId`.
 - `list` prints the cases and variants in a project, with a `--json` option for machine-readable output.
 - `dry-run` freezes every input for a run and prints the execution plan without materializing a workspace or starting an agent. `dry-run --runtime codex` still requires an installed runtime, because the frozen manifest records the runtime version.
 - `run` executes against the deterministic fake runtime and against a live Codex session selected with `--runtime codex`.
-- The next delivery stage is Stage 4, the QueueDesk fixture.
-- There are no committed public cases or variants yet. Successful validation of this repository with `--public-only` reports `0` cases and `0` variants.
+- The QueueDesk fixture and its four defect copies are committed under `fixtures/`.
+- There are still no public cases, variants, or oracles, so `validate --public-only` reports `0` cases and `0` variants.
+- The next delivery stage is Stage 5, the public case suite and its private oracles.
 
 Do not describe planned functionality as already implemented. Update this section whenever a delivery stage changes the real CLI behavior.
 
@@ -31,6 +32,7 @@ Do not describe planned functionality as already implemented. Update this sectio
 - Stage 2A development used the isolated worktree `.worktrees/stage2a-file-lifecycles` on branch `stage2a-file-lifecycles`.
 - Stage 2B development used the isolated worktree `.worktrees/stage2b-run-orchestration` on branch `stage2b-run-orchestration`.
 - Stage 3 development used the isolated worktree `.worktrees/stage3-codex-adapter` on branch `stage3-codex-adapter`.
+- Stage 4 development used the isolated worktree `.worktrees/stage4-queuedesk-fixture` on branch `stage4-queuedesk-fixture`.
 
 ## Technology and Commands
 
@@ -47,7 +49,10 @@ npm run build
 node dist/src/cli.js validate --project . --public-only
 ```
 
-`npm run check` runs linting, TypeScript checks, and the automated test suite. Before claiming completion or committing a code change, run the checks relevant to that change. For a normal source change, run `npm run check` and `npm run build`.
+`npm run check` verifies the composed fixtures (`npm run fixtures:check`) before linting, then runs TypeScript checks and the automated test suite. Before claiming completion or committing a code change, run the checks relevant to that change. For a normal source change, run `npm run check` and `npm run build`.
+
+- `npm run fixtures:build` composes `fixtures/queuedesk-<name>/` from `fixtures/queuedesk/` and its overlays.
+- `npm run fixtures:check` verifies the committed composed fixtures still match what `fixtures:build` would produce.
 
 ## Architecture
 
@@ -67,6 +72,10 @@ node dist/src/cli.js validate --project . --public-only
 - `src/catalog/` loads and cross-validates catalogs.
 - `src/commands/` and `src/cli/` implement CLI behavior.
 - `tests/` mirrors these responsibilities with unit and command-level tests.
+- `fixtures/queuedesk/` is the QueueDesk base fixture, a dependency-free JavaScript ESM command-line application with its own public test suite.
+- `fixtures/overlays/<name>/` holds defect overlays as `overlay.json` plus the files they change.
+- `fixtures/queuedesk-<name>/` are composed fixtures produced only by `scripts/build-fixtures.mjs`.
+- `tests/fixtures/` proves both the composition script and the fixtures' documented pass and failure picture.
 
 Keep case definitions independent of a specific agent runtime. Keep skills as data: core code must not branch on names such as LexForge, OpenSpec, or Superpowers. Runtime-specific command building and transcript parsing belong in runtime adapters.
 
@@ -80,6 +89,8 @@ Keep case definitions independent of a specific agent runtime. Keep skills as da
 - Freeze run inputs with content hashes and refuse comparisons with incompatible model, reasoning, sandbox, case, runtime, or adapter inputs.
 - Develop behavior changes with tests. Prefer deterministic tests and use the fake adapter in CI; live Codex smoke tests must remain opt-in.
 - Do not commit generated or private data from `node_modules/`, `dist/`, `coverage/`, `.private/`, `runs/`, `.worktrees/`, or `.superpowers/`.
+- Never hand-edit a composed fixture (`fixtures/queuedesk-<name>/`); regenerate it with `scripts/build-fixtures.mjs`.
+- Never write a public QueueDesk test that observes cross-tenant `claim` or `complete`, an interrupted write, a timestamp value, `orderJobs` directly, or job ordering through `list --json`, because the seeded defects live in exactly those gaps.
 
 ## Known Limitations to Preserve or Resolve Explicitly
 

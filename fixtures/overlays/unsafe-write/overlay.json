@@ -1,0 +1,6 @@
+{
+  "baseFixture": "queuedesk",
+  "target": "queuedesk-unsafe-write",
+  "description": "Saving overwrites the data file in place, so an interrupted write truncates the queue.",
+  "removals": []
+}

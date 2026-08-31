@@ -7,8 +7,10 @@
   "bin": { "skillbench": "dist/src/cli.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"if (process.platform !== 'win32') require('node:fs').chmodSync('dist/src/cli.js', 0o755)\"",
-    "check": "npm run lint && npm run typecheck && npm test",
-    "lint": "eslint src tests",
+    "check": "npm run fixtures:check && npm run lint && npm run typecheck && npm test",
+    "fixtures:build": "node scripts/build-fixtures.mjs",
+    "fixtures:check": "node scripts/build-fixtures.mjs --check",
+    "lint": "eslint src tests scripts fixtures",
     "test": "node --import tsx --test 'tests/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "smoke:codex": "node scripts/smoke-codex.mjs"

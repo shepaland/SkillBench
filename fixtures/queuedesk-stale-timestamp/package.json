@@ -1,0 +1,11 @@
+{
+  "name": "queuedesk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline multi-tenant job queue",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test"
+  }
+}
