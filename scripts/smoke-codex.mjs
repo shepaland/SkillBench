@@ -1,14 +1,34 @@
 #!/usr/bin/env node
+// Usage:
+//   1. npm run build              (this script imports the compiled CLI's hash helpers)
+//   2. Codex must be installed and authenticated (`codex --version` succeeds)
+//   3. SKILLBENCH_LIVE=1 npm run smoke:codex
+// This spends the operator's real Codex credits. Run it once, not in a loop.
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { hashTree, hashValue } from "../dist/src/integrity/content-hash.js";
 
 if (process.env.SKILLBENCH_LIVE !== "1") {
   console.error("Refusing to start a live agent. Set SKILLBENCH_LIVE=1 to run this check.");
+  console.error("Before that: run `npm run build`, and make sure Codex is installed and authenticated.");
+  console.error("This spends real Codex credits — run it once, not in a loop.");
   process.exit(2);
+}
+
+// Imported behind the opt-in guard, and only now: on a machine that has not
+// run `npm run build` yet, this module does not exist, and importing it at
+// the top of the file would fail before the refusal message above could
+// ever print.
+let hashTree;
+let hashValue;
+try {
+  ({ hashTree, hashValue } = await import("../dist/src/integrity/content-hash.js"));
+} catch (error) {
+  console.error("Could not load dist/src/integrity/content-hash.js. Run `npm run build` first.");
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
 }
 
 // Last-resort default when SKILLBENCH_MODEL is unset and the operator's own
@@ -75,12 +95,31 @@ const result = spawnSync(process.execPath, [
   "--json",
 ], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
 
+if (result.error) {
+  console.error(`Failed to start the CLI: ${result.error.message}`);
+  process.exit(1);
+}
+
 process.stdout.write(result.stdout ?? "");
 
-const runs = JSON.parse(result.stdout ?? "{}").runs ?? [];
+let report;
+try {
+  // result.stdout is "" (not null/undefined) whenever the CLI exits before
+  // ever printing its JSON summary, e.g. a DependencyError thrown before any
+  // run starts — "" is not nullish, so a plain ?? fallback would not catch
+  // it and JSON.parse("") would throw a raw syntax error instead of the
+  // actionable message below.
+  report = JSON.parse(result.stdout || "{}");
+} catch (error) {
+  console.error(`The CLI's stdout was not valid JSON (exit code ${String(result.status)}).`);
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
+const runs = report.runs ?? [];
 const [run] = runs;
 if (run === undefined) {
-  console.error("The CLI produced no run report.");
+  console.error(`The CLI produced no run report (exit code ${String(result.status)}).`);
   process.exit(1);
 }
 
@@ -93,6 +132,20 @@ for (const assertion of evidence.assertions) {
   console.log(`  ${assertion.assertionId}: ${assertion.outcome} (${assertion.source})`);
 }
 console.log(`  stop rule evaluated: ${stopped === undefined ? "no" : "yes"}, satisfied: ${stopped?.satisfied}`);
+
+// The whole point of this check is to catch a regression in oracle grading.
+// A critical assertion that did not pass must fail the script, not just get
+// printed above and forgotten.
+const failedCritical = evidence.assertions.filter(
+  (assertion) => assertion.critical === true && assertion.outcome !== "passed",
+);
+if (failedCritical.length > 0) {
+  for (const assertion of failedCritical) {
+    const detail = assertion.detail ? ` — ${assertion.detail}` : "";
+    console.error(`critical assertion ${assertion.assertionId} did not pass: outcome=${assertion.outcome}${detail}`);
+  }
+  process.exit(1);
+}
 
 if (stopped === undefined) {
   console.error("The continuation gate never ran: the second step was sent without evaluating the rule.");
