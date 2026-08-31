@@ -53,6 +53,18 @@ test("a passing run reports completed and writes one run directory", async () =>
   assert.equal(directories.length, 1);
 });
 
+test("a run against the fake runtime writes no raw/ directory", async () => {
+  const project = await createTempProject();
+  const { io } = createIo();
+
+  await runRun(options(project.root), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes());
+
+  const runDirectories = await readdir(join(project.root, "runs/F01/example"));
+  const runDirectory = join(project.root, "runs/F01/example", runDirectories[0] ?? "");
+  const entries = await readdir(runDirectory);
+  assert.ok(!entries.includes("raw"));
+});
+
 test("--runs 3 produces three independent run directories", async () => {
   const project = await createTempProject();
   const { io } = createIo();

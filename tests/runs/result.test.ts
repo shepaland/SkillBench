@@ -32,7 +32,7 @@ async function createWriter() {
     runId: "20260830T175302Z-a1b2c3",
   });
   const paths = await ProjectPaths.create(project.root);
-  const writer = new RunEvidenceWriter(new ImmutableJsonStore(paths), manifest);
+  const writer = new RunEvidenceWriter(new ImmutableJsonStore(paths), manifest, paths);
   return { project, manifest, writer };
 }
 
@@ -52,6 +52,18 @@ test("writing the same manifest twice is idempotent", async () => {
 
   await writer.writeManifest();
   await writer.writeManifest();
+});
+
+test("appendRawLine writes lines in order and flushRawLines reports no failures", async () => {
+  const { project, writer } = await createWriter();
+
+  writer.appendRawLine("s1", '{"line":1}');
+  writer.appendRawLine("s1", '{"line":2}');
+  const failures = await writer.flushRawLines();
+
+  assert.deepEqual(failures, []);
+  const written = await readFile(join(project.root, writer.directory, "raw/step-s1.jsonl"), "utf8");
+  assert.equal(written, '{"line":1}\n{"line":2}\n');
 });
 
 test("writes transcript, changes, and result as separate records", async () => {

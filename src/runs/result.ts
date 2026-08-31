@@ -1,5 +1,8 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { FrozenRunManifest } from "../domain/model.js";
 import type { AssertionResult } from "../oracles/run-oracle.js";
+import type { ProjectPaths } from "../paths/project-paths.js";
 import type { RuntimeExecution } from "../runtime/runtime-adapter.js";
 import type { ImmutableJsonStore } from "../storage/immutable-json-store.js";
 import { runDirectory } from "./freeze-inputs.js";
@@ -48,12 +51,34 @@ export interface RunResult {
 
 export class RunEvidenceWriter {
   public readonly directory: string;
+  private rawQueue: Promise<void> = Promise.resolve();
+  private readonly rawFailures: string[] = [];
 
   public constructor(
     private readonly store: ImmutableJsonStore,
     private readonly manifest: FrozenRunManifest,
+    private readonly paths: ProjectPaths,
   ) {
     this.directory = runDirectory(manifest);
+  }
+
+  /** Queues one raw runtime line, written before parsing so a parser defect cannot destroy it. */
+  public appendRawLine(stepId: string, line: string): void {
+    this.rawQueue = this.rawQueue
+      .then(async () => {
+        const path = await this.paths.resolveOutput(`${this.directory}/raw/step-${stepId}.jsonl`);
+        await mkdir(dirname(path), { recursive: true });
+        await appendFile(path, `${line}\n`, "utf8");
+      })
+      .catch((error: unknown) => {
+        this.rawFailures.push(error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  /** Waits for queued raw writes and reports any that failed. */
+  public async flushRawLines(): Promise<readonly string[]> {
+    await this.rawQueue;
+    return Object.freeze([...this.rawFailures]);
   }
 
   public async writeManifest(): Promise<void> {

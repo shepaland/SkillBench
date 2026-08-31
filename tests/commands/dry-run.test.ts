@@ -93,7 +93,7 @@ test("an unknown runtime raises a dependency error", async () => {
   const { io } = createIo();
 
   await assert.rejects(
-    runDryRun(options(project.root, { runtime: "codex" }), io),
+    runDryRun(options(project.root, { runtime: "cursor" }), io),
     (error: unknown) => error instanceof DependencyError && error.exitCode === 2,
   );
 });

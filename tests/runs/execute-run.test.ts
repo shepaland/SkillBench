@@ -72,7 +72,7 @@ async function createHarness(
   };
 }
 
-function runInput(harness: Harness, runId: string, overrides: RunOverrides = {}): ExecuteRunInput {
+async function runInput(harness: Harness, runId: string, overrides: RunOverrides = {}): Promise<ExecuteRunInput> {
   return {
     paths: harness.paths,
     store: harness.store,
@@ -80,7 +80,7 @@ function runInput(harness: Harness, runId: string, overrides: RunOverrides = {})
     catalogCase: harness.catalogCase,
     variant: harness.variant,
     configuration,
-    adapter: overrides.adapter ?? selectAdapter("fake", harness.catalogCase.manifest).adapter,
+    adapter: overrides.adapter ?? (await selectAdapter("fake", harness.catalogCase.manifest)).adapter,
     runId,
     repetitionIndex: 0,
     ...(overrides.keepWorkspace === undefined ? {} : { keepWorkspace: overrides.keepWorkspace }),
@@ -91,7 +91,7 @@ function runInput(harness: Harness, runId: string, overrides: RunOverrides = {})
 test("a successful run writes every evidence file and reports completed", async () => {
   const harness = await createHarness();
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c3"));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c3"));
 
   assert.equal(result.status, "completed");
   assert.equal(result.failedStep, null);
@@ -115,7 +115,7 @@ test("a failing oracle check reports completed with a failed assertion", async (
     await writeFile(join(project.oracleDirectory, "checks/assert-1.js"), "process.exit(7);\n");
   });
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c4"));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c4"));
 
   assert.equal(result.status, "completed");
   assert.equal(result.assertions[0]?.outcome, "failed");
@@ -126,7 +126,7 @@ test("a missing private oracle reports errored at the grade step and keeps earli
   const harness = await createHarness();
   await rm(harness.project.oracleDirectory, { recursive: true, force: true });
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c5"));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c5"));
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "grade");
@@ -141,7 +141,7 @@ test("a private oracle changed after freezing reports errored at the grade step"
   const harness = await createHarness();
   await writeFile(join(harness.project.oracleDirectory, "checks/assert-1.js"), "process.exit(0); // edited\n");
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2db"));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2db"));
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "grade");
@@ -162,7 +162,7 @@ test("an exhausted adapter reports exhausted and still grades", async () => {
     }),
   };
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c6", { adapter: exhaustedAdapter }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c6", { adapter: exhaustedAdapter }));
 
   assert.equal(result.status, "exhausted");
   assert.equal(result.assertions.length, 1);
@@ -179,7 +179,56 @@ test("a process killed by a signal reports exhausted even without a timeout flag
     }),
   };
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2ca", { adapter: killedAdapter }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2ca", { adapter: killedAdapter }));
+
+  assert.equal(result.status, "exhausted");
+});
+
+test("a non-zero exit code without exhaustion reports errored at the execute step", async () => {
+  const harness = await createHarness();
+  const failingAdapter: RuntimeAdapter = {
+    execute: () => Promise.resolve({
+      ...closedSession,
+      process: { exitCode: 1, signal: null, timedOut: false },
+    }),
+  };
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2cb", { adapter: failingAdapter }));
+
+  assert.equal(result.status, "errored");
+  assert.equal(result.failedStep, "execute");
+  assert.match(result.failureMessage, /exited with code 1/u);
+});
+
+test("a signal without exhaustion reports errored at the execute step", async () => {
+  const harness = await createHarness();
+  const signalledAdapter: RuntimeAdapter = {
+    execute: () => Promise.resolve({
+      ...closedSession,
+      process: { exitCode: null, signal: "SIGSEGV", timedOut: false },
+    }),
+  };
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2cc", { adapter: signalledAdapter }));
+
+  assert.equal(result.status, "errored");
+  assert.equal(result.failedStep, "execute");
+  assert.match(result.failureMessage, /SIGSEGV/u);
+});
+
+test("exhaustion takes precedence over a non-zero exit code", async () => {
+  const harness = await createHarness();
+  const exhaustedFailingAdapter: RuntimeAdapter = {
+    execute: () => Promise.resolve({
+      ...closedSession,
+      process: { exitCode: 1, signal: null, timedOut: true },
+      exhaustion: "wall_clock",
+    }),
+  };
+
+  const result = await executeRun(
+    await runInput(harness, "20260830T175302Z-a1b2cd", { adapter: exhaustedFailingAdapter }),
+  );
 
   assert.equal(result.status, "exhausted");
 });
@@ -192,7 +241,7 @@ test("an adapter failure reports errored at the execute step", async () => {
     },
   };
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c7", { adapter: brokenAdapter }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c7", { adapter: brokenAdapter }));
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "execute");
@@ -203,7 +252,7 @@ test("a source fixture change during the run reports errored at the fixture veri
   const harness = await createHarness();
   const mutatingAdapter = fixtureMutatingAdapter(harness);
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c8", { adapter: mutatingAdapter }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c8", { adapter: mutatingAdapter }));
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "verify_fixture");
@@ -220,7 +269,7 @@ test("agent changes appear in the change set with allowed and forbidden observat
     },
   };
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2c9", { adapter: editingAdapter }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2c9", { adapter: editingAdapter }));
 
   assert.notEqual(workspacePath, "");
   assert.deepEqual(result.changes.modified, ["index.js"]);
@@ -238,9 +287,9 @@ test("the workspace is removed by default and preserved with keepWorkspace", asy
     },
   };
 
-  const removed = await executeRun(runInput(harness, "20260830T175302Z-a1b2d0", { adapter: observingAdapter }));
+  const removed = await executeRun(await runInput(harness, "20260830T175302Z-a1b2d0", { adapter: observingAdapter }));
   const preserved = await executeRun(
-    runInput(harness, "20260830T175302Z-a1b2d1", { adapter: observingAdapter, keepWorkspace: true }),
+    await runInput(harness, "20260830T175302Z-a1b2d1", { adapter: observingAdapter, keepWorkspace: true }),
   );
 
   assert.equal(observed.length, 2);
@@ -264,7 +313,7 @@ test("the variant material is installed before the baseline snapshot", async () 
     },
   };
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2d2", { adapter: inspectingAdapter }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2d2", { adapter: inspectingAdapter }));
 
   assert.equal(installedDuringSession, true);
   assert.deepEqual(result.changes.added, []);
@@ -274,7 +323,7 @@ test("the mounted grading area is gone after a successful run", async () => {
   const harness = await createHarness();
   const tempParent = await mkdtemp(join(tmpdir(), "skillbench-execute-run-test-"));
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2d3", { tempParent }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2d3", { tempParent }));
 
   assert.equal(result.status, "completed");
   assert.deepEqual(await oracleLeftovers(tempParent), []);
@@ -288,7 +337,7 @@ test("the mounted grading area is gone after a run with a failed critical assert
   });
   const tempParent = await mkdtemp(join(tmpdir(), "skillbench-execute-run-test-"));
 
-  const result = await executeRun(runInput(harness, "20260830T175302Z-a1b2d5", { tempParent }));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2d5", { tempParent }));
 
   assert.equal(result.status, "completed");
   assert.equal(result.assertions[0]?.outcome, "failed");
@@ -302,7 +351,7 @@ test("the mounted grading area is gone after a run that errored once the oracle 
   const tempParent = await mkdtemp(join(tmpdir(), "skillbench-execute-run-test-"));
 
   const result = await executeRun(
-    runInput(harness, "20260830T175302Z-a1b2d6", { adapter: fixtureMutatingAdapter(harness), tempParent }),
+    await runInput(harness, "20260830T175302Z-a1b2d6", { adapter: fixtureMutatingAdapter(harness), tempParent }),
   );
 
   assert.equal(result.status, "errored");
@@ -323,7 +372,7 @@ test("a workspace preserved by keepWorkspace carries no private oracle content",
   };
 
   const result = await executeRun(
-    runInput(harness, "20260830T175302Z-a1b2d4", { adapter: capturingAdapter, keepWorkspace: true }),
+    await runInput(harness, "20260830T175302Z-a1b2d4", { adapter: capturingAdapter, keepWorkspace: true }),
   );
 
   assert.notEqual(workspacePath, "");
@@ -486,7 +535,7 @@ async function runWithScript(script: ScriptCase): Promise<RunResult & { readonly
   const adapter = new FakeAdapter(fakeScript);
 
   const runId = createRunId(new Date(), defaultRunIdSuffix());
-  const result = await executeRun(runInput(harness, runId, { adapter }));
+  const result = await executeRun(await runInput(harness, runId, { adapter }));
 
   const transcript = JSON.parse(
     await readFile(join(harness.project.root, runDirectory(result.manifest), "transcript.json"), "utf8"),
@@ -516,7 +565,7 @@ async function runWithFailingOracleLifecycle(): Promise<RunResult> {
   };
   try {
     const runId = createRunId(new Date(), defaultRunIdSuffix());
-    return await executeRun(runInput(harness, runId));
+    return await executeRun(await runInput(harness, runId));
   } finally {
     oracleFileSystem.realpath = originalRealpath;
   }

@@ -55,7 +55,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     repetitionIndex: input.repetitionIndex,
     runId: input.runId,
   });
-  const writer = new RunEvidenceWriter(input.store, manifest);
+  const writer = new RunEvidenceWriter(input.store, manifest, input.paths);
   await writer.writeManifest();
 
   let workspace: MaterializedWorkspace | undefined;
@@ -118,6 +118,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
         ruleOutcomes.push(...evaluateRules(gated, events));
         return Promise.resolve();
       },
+      onRawLine: (stepId, line) => { writer.appendRawLine(stepId, line); },
     });
     ruleOutcomes.push(...evaluateRules(rules.filter((rule) => !gatedRuleIds.has(rule.id)), execution.events));
     await writer.writeTranscript(execution, ruleOutcomes);
@@ -155,12 +156,27 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     step = "verify_fixture";
     await workspace.verifySource();
 
-    status = execution.exhaustion === null ? "completed" : "exhausted";
+    if (execution.exhaustion !== null) {
+      status = "exhausted";
+    } else if (execution.process.exitCode !== null && execution.process.exitCode !== 0) {
+      status = "errored";
+      failedStep = "execute";
+      failureMessage = `the runtime exited with code ${execution.process.exitCode.toString()}`;
+    } else if (execution.process.signal !== null) {
+      status = "errored";
+      failedStep = "execute";
+      failureMessage = `the runtime was terminated by signal ${execution.process.signal}`;
+    } else {
+      status = "completed";
+    }
   } catch (error: unknown) {
     status = "errored";
     failedStep = step;
     failureMessage = errorMessage(error);
   } finally {
+    for (const failure of await writer.flushRawLines()) {
+      cleanupFailures.push(`raw evidence: ${failure}`);
+    }
     const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
     if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
     if (input.keepWorkspace === true) {
