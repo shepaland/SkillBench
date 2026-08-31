@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -94,6 +94,45 @@ test("check mode passes on a freshly built tree and fails after a hand edit", as
   const drift = await build(root, ["--check"]);
   assert.equal(drift.code, 1);
   assert.match(drift.stderr, /base-broken\/src\/index\.js/u);
+});
+
+test("check mode rejects a symbolic link inside the committed fixture", async () => {
+  const root = await createRoot();
+  await createOverlay(
+    root,
+    "broken",
+    { baseFixture: "base", target: "base-broken", description: "Replaces the index.", removals: [] },
+    { "src/index.js": "export const value = 2;\n" },
+  );
+  assert.equal((await build(root)).code, 0);
+
+  const committed = join(root, "fixtures/base-broken/src/index.js");
+  const external = join(root, "external-index.js");
+  await writeFile(external, "export const value = 2;\n");
+  await rm(committed);
+  await symlink(external, committed);
+
+  const outcome = await build(root, ["--check"]);
+  assert.equal(outcome.code, 1);
+  assert.match(outcome.stderr, /symbolic link/u);
+});
+
+test("check mode rejects a committed file whose mode differs from the overlay", async () => {
+  const root = await createRoot();
+  await createOverlay(
+    root,
+    "broken",
+    { baseFixture: "base", target: "base-broken", description: "Replaces the index.", removals: [] },
+    { "src/index.js": "export const value = 2;\n" },
+  );
+  assert.equal((await build(root)).code, 0);
+
+  const committed = join(root, "fixtures/base-broken/src/index.js");
+  await chmod(committed, 0o755);
+
+  const outcome = await build(root, ["--check"]);
+  assert.equal(outcome.code, 1);
+  assert.match(outcome.stderr, /mode/u);
 });
 
 test("check mode reports a composed fixture that was never built", async () => {

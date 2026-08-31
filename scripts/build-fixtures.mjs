@@ -147,6 +147,7 @@ async function verify(root, overlay, composed) {
   if (!(await isDirectory(target))) {
     throw new Error(`composed fixture ${FIXTURES}/${overlay.target} is missing; run npm run fixtures:build`);
   }
+  await assertNoSymbolicLinks(target, `composed fixture ${FIXTURES}/${overlay.target}`);
   const expected = await listFiles(composed);
   const actual = await listFiles(target);
 
@@ -159,8 +160,11 @@ async function verify(root, overlay, composed) {
     if (right === undefined) {
       throw new Error(`${FIXTURES}/${overlay.target}/${path} is missing; run npm run fixtures:build`);
     }
-    if (!left.equals(right)) {
+    if (!left.content.equals(right.content)) {
       throw new Error(`${FIXTURES}/${overlay.target}/${path} differs from its overlay; run npm run fixtures:build`);
+    }
+    if (left.mode !== right.mode) {
+      throw new Error(`${FIXTURES}/${overlay.target}/${path} has a different file mode than its overlay; run npm run fixtures:build`);
     }
   }
 }
@@ -172,7 +176,9 @@ async function listFiles(root, prefix = "", collected = new Map()) {
       await listFiles(root, relativePath, collected);
       continue;
     }
-    collected.set(relativePath, await readFile(join(root, relativePath)));
+    const path = join(root, relativePath);
+    const [content, status] = await Promise.all([readFile(path), stat(path)]);
+    collected.set(relativePath, { content, mode: status.mode });
   }
   return collected;
 }
