@@ -90,7 +90,7 @@ Keep case definitions independent of a specific agent runtime. Keep skills as da
 - Develop behavior changes with tests. Prefer deterministic tests and use the fake adapter in CI; live Codex smoke tests must remain opt-in.
 - Do not commit generated or private data from `node_modules/`, `dist/`, `coverage/`, `.private/`, `runs/`, `.worktrees/`, or `.superpowers/`.
 - Never hand-edit a composed fixture (`fixtures/queuedesk-<name>/`); regenerate it with `scripts/build-fixtures.mjs`.
-- Never write a public QueueDesk test that observes cross-tenant `claim` or `complete`, an interrupted write, a timestamp value, or `orderJobs` directly, because the seeded defects live in exactly those gaps.
+- Never write a public QueueDesk test that observes cross-tenant `claim` or `complete`, an interrupted write, a timestamp value, `orderJobs` directly, or job ordering through `list --json`, because the seeded defects live in exactly those gaps.
 
 ## Known Limitations to Preserve or Resolve Explicitly
 
