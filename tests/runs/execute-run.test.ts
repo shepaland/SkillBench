@@ -343,9 +343,43 @@ test("a workspace preserved by keepWorkspace carries no private oracle content",
   await rm(dirname(workspacePath), { recursive: true, force: true });
 });
 
-test("grades a transcript assertion at the continuation point and proceeds anyway", async () => {
-  // Case: step s1 declares continuation rule "stopped" (no_file_change);
-  // assertion A2 is graded from it; the fake script edits a file during s1.
+test("grades a transcript assertion at the continuation point, not over the whole transcript", async () => {
+  // Case: step s1 declares continuation rule "stopped" (no_file_change); assertion A2
+  // is graded from it. The file change happens during s2, AFTER s1's continuation
+  // point. A correct implementation evaluates the gated rule only against the events
+  // recorded up to the continuation, so it sees no file change and the rule holds; an
+  // "evaluate everything at session end" implementation would instead see the later
+  // file change and wrongly flip the assertion to failed. transcriptRuleOutcomes.length
+  // alone can't distinguish the two (both produce exactly one outcome), so this test
+  // asserts on the outcome's value, not just its presence.
+  const result = await runWithScript({
+    transcriptRules: [{ id: "stopped", check: "no_file_change" }],
+    assertions: [
+      { id: "A1", dimension: "functional", critical: true },
+      { id: "A2", dimension: "process", critical: false, transcriptRuleId: "stopped" },
+    ],
+    promptSteps: [
+      { id: "s1", prompt: "ask first", continuation: { eventRuleIds: ["stopped"] } },
+      { id: "s2", prompt: "now do it" },
+    ],
+    scriptSteps: [
+      { stepId: "s1", events: [] },
+      { stepId: "s2", events: [{ type: "file_change", afterMs: 1, paths: ["src/a.js"], outsidePaths: [] }] },
+    ],
+  });
+
+  const graded = result.assertions.find((assertion) => assertion.assertionId === "A2");
+  assert.equal(graded?.outcome, "passed");
+  assert.equal(graded.source, "transcript");
+  assert.equal(result.assertions.find((assertion) => assertion.assertionId === "A1")?.source, "oracle");
+  assert.equal(result.transcriptRuleOutcomes.length, 1);
+  assert.equal(result.transcriptRuleOutcomes[0]?.satisfied, true);
+  assert.equal(result.events.filter((event) => event.type === "prompt_sent").length, 2);
+});
+
+test("records a failed continuation rule as a failed assertion and still sends every step", async () => {
+  // Same wiring as above, but the file change happens during s1, before its own
+  // continuation point, so the "no file change" rule is violated there.
   const result = await runWithScript({
     transcriptRules: [{ id: "stopped", check: "no_file_change" }],
     assertions: [
@@ -365,8 +399,6 @@ test("grades a transcript assertion at the continuation point and proceeds anywa
   const graded = result.assertions.find((assertion) => assertion.assertionId === "A2");
   assert.equal(graded?.outcome, "failed");
   assert.equal(graded.source, "transcript");
-  assert.equal(result.assertions.find((assertion) => assertion.assertionId === "A1")?.source, "oracle");
-  assert.equal(result.transcriptRuleOutcomes.length, 1);
   // The violation does not stop the run: both declared steps were sent.
   assert.equal(result.events.filter((event) => event.type === "prompt_sent").length, 2);
 });
