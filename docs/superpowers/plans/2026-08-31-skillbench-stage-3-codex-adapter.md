@@ -667,7 +667,7 @@ Expected: PASS.
 ```bash
 git add schemas/case.schema.json src/domain/model.ts tests/schemas/validator.test.ts
 git commit -m "$(cat <<'EOF'
-feat: type the transcript rule schema and evaluate rules over events
+feat: add optional transcriptRuleId field to assertion declarations
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 EOF
