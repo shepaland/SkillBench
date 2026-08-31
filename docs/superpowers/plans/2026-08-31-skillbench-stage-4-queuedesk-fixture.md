@@ -15,7 +15,7 @@
 - All committed text is concise international English. `README.md` keeps its English half first and a complete Russian translation second.
 - The fixture depends on nothing outside the Node.js standard library, and `fixtures/queuedesk/package.json` declares no dependencies.
 - Nothing inside a composed fixture may mark it as generated or hint at a seeded defect. The agent under measurement reads those files as an ordinary project.
-- Public tests must never observe: cross-tenant `claim` or `complete` at any level, an interrupted write, a timestamp value, or `orderJobs` directly. These four gaps are where the seeded defects live.
+- Public tests must never observe: cross-tenant `claim` or `complete` at any level, an interrupted write, the `updatedAt` of a claimed job, or job ordering anywhere except the command-level tests of `list` and `claim`. These four gaps are where the seeded defects live. Asserting `createdAt` and `updatedAt` on a newly created job, and `updatedAt` on a completed job, stays allowed: no overlay touches those paths.
 - Job identifiers are `job-` plus a zero-padded four-digit sequence, so output is machine independent.
 - Never execute shell text; scripts and tests spawn explicit executables with explicit arguments.
 - Commits end with the line `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
@@ -784,13 +784,12 @@ test("listing all tenants requires the admin role", () => {
   });
 });
 
-test("claims a queued job and records the time", () => {
+test("claims a queued job without mutating the previous state", () => {
   const state = stateWith([job({ id: "job-0001" })]);
   const { state: after, job: claimed } = claimJob(state, { actor, now });
 
   assert.equal(claimed.id, "job-0001");
   assert.equal(claimed.state, "claimed");
-  assert.equal(claimed.updatedAt, now);
   assert.equal(after.jobs[0].state, "claimed");
   assert.equal(state.jobs[0].state, "queued");
 });
@@ -951,6 +950,8 @@ EOF
 
 The renderer prints what it is given, in the order it is given. The `claim-order` overlay is the copy where sorting moves in here; the base must not sort.
 
+**Coverage constraint:** no test in this file may depend on the order of the list it passes in, and no two jobs in a rendering test may have different priorities. The `claim-order` overlay makes this renderer sort, and an order-sensitive test here would turn that overlay's single expected failure into several.
+
 - [ ] **Step 1: Write the failing rendering tests**
 
 `fixtures/queuedesk/tests/output.test.js`:
@@ -968,7 +969,7 @@ const first = {
   priority: "normal",
   state: "queued",
 };
-const second = { ...first, id: "job-0002", title: "Rotate the key", priority: "high" };
+const second = { ...first, id: "job-0002", title: "Rotate the key" };
 
 test("renders a single job on one line", () => {
   assert.equal(renderJob(first), "job-0001  queued  normal  Ship the release notes");
@@ -980,7 +981,7 @@ test("renders a table with a header and a plural footer", () => {
     [
       "ID        STATE   PRIORITY  TITLE",
       "job-0001  queued  normal    Ship the release notes",
-      "job-0002  queued  high      Rotate the key",
+      "job-0002  queued  normal    Rotate the key",
       "2 jobs",
     ].join("\n"),
   );
@@ -992,12 +993,6 @@ test("uses the singular footer for one job", () => {
 
 test("renders an empty list without a table", () => {
   assert.equal(renderJobList([]), "no jobs");
-});
-
-test("keeps the order it is given", () => {
-  const lines = renderJobList([second, first]).split("\n");
-  assert.equal(lines[1].startsWith("job-0002"), true);
-  assert.equal(lines[2].startsWith("job-0001"), true);
 });
 
 test("renders indented JSON", () => {
@@ -1065,7 +1060,7 @@ function renderRow(cells, widths) {
 - [ ] **Step 4: Run the tests and verify they pass**
 
 Run: `cd fixtures/queuedesk && node --test tests/output.test.js`
-Expected: PASS, 7 tests, 0 failures.
+Expected: PASS, 6 tests, 0 failures.
 
 - [ ] **Step 5: Commit**
 
