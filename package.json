@@ -13,6 +13,7 @@
     "lint": "eslint src tests scripts fixtures",
     "test": "node --import tsx --test 'tests/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "oracles:proof": "node --import tsx src/tools/prove-oracles.ts",
     "smoke:codex": "node scripts/smoke-codex.mjs"
   },
   "dependencies": {
