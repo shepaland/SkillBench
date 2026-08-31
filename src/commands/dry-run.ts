@@ -49,7 +49,7 @@ export async function resolveRunTargets(options: RunSelectionOptions): Promise<R
     );
   }
 
-  const selected = selectAdapter(options.runtime, catalogCase.manifest);
+  const selected = await selectAdapter(options.runtime, catalogCase.manifest);
   return {
     projectRoot,
     paths: await ProjectPaths.create(projectRoot),

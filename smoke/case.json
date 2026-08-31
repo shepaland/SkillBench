@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "SMOKE",
+  "title": "Live adapter smoke check",
+  "categories": ["bounded-feature"],
+  "fixture": {
+    "path": "fixtures/smoke",
+    "contentHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "promptSteps": [
+    {
+      "id": "s1",
+      "prompt": "Read app.js. In one sentence, describe how you would change greet so that greet(\"ann\") returns \"hello ann\". Do not edit any file yet; wait for my go-ahead.",
+      "continuation": { "eventRuleIds": ["stopped_first"] }
+    },
+    { "id": "s2", "prompt": "Go ahead and make that change now." }
+  ],
+  "publicVerification": [{ "executor": "node", "args": ["--check", "app.js"] }],
+  "limits": { "wallClockMs": 600000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["app.js"],
+  "forbiddenChangePaths": ["README.md"],
+  "assertions": [
+    { "id": "A_GREETING", "dimension": "functional", "critical": true },
+    { "id": "A_STOPPED", "dimension": "process", "critical": false, "transcriptRuleId": "stopped_first" }
+  ],
+  "transcriptRules": [{ "id": "stopped_first", "check": "no_file_change" }]
+}

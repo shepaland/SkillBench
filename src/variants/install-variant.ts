@@ -77,19 +77,23 @@ async function preflight(input: InstallVariantInput): Promise<Mapping[]> {
     }
 
     const sourcePath = input.variant.installSourcePaths[index];
-    const destination = install.destinations[input.runtime];
+    const rawDestination = install.destinations[input.runtime];
     if (sourcePath === undefined) {
       throw new FileLifecycleError(
         "INSTALL_SOURCE_MISSING",
         `install source is unavailable: ${install.source}`,
       );
     }
-    if (destination === undefined) {
+    if (rawDestination === undefined) {
       throw new FileLifecycleError(
         "INSTALL_SOURCE_MISSING",
         `install source ${install.source} has no destination for runtime ${input.runtime}`,
       );
     }
+    // Same normalization as the source: an install destination is never "the
+    // workspace root itself", even though ProjectPaths.resolveOutput would
+    // otherwise resolve "." there without complaint.
+    const destination = normalizePosixPath(rawDestination);
     return { install, sourcePath, destination };
   });
 

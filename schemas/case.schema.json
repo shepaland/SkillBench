@@ -139,21 +139,38 @@
       "required": ["id", "dimension", "critical"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "dimension": {
-          "enum": ["functional", "regression", "security", "scope", "process"]
-        },
-        "critical": { "type": "boolean" }
+        "dimension": { "enum": ["functional", "regression", "security", "scope", "process"] },
+        "critical": { "type": "boolean" },
+        "transcriptRuleId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "commandMatcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check", "executor", "argsPrefix"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "check": { "enum": ["command_ran", "command_before_file_change", "command_after_file_change"] },
+        "executor": { "type": "string", "minLength": 1 },
+        "argsPrefix": { "type": "array", "items": { "type": "string" } },
+        "expect": { "type": "boolean" }
+      }
+    },
+    "eventPresence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "check": { "enum": ["no_file_change", "assistant_message"] },
+        "expect": { "type": "boolean" }
       }
     },
     "transcriptRule": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "event"],
-      "properties": {
-        "id": { "$ref": "#/$defs/id" },
-        "event": { "type": "string", "minLength": 1 },
-        "beforeStepId": { "$ref": "#/$defs/id" }
-      }
+      "oneOf": [
+        { "$ref": "#/$defs/eventPresence" },
+        { "$ref": "#/$defs/commandMatcher" }
+      ]
     }
   }
 }

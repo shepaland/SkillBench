@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "caseId": "SMOKE",
+  "checks": [
+    {
+      "assertionId": "A_GREETING",
+      "command": { "executor": "node", "args": ["check-greeting.mjs"] },
+      "workingDirectory": ".",
+      "timeoutMs": 30000
+    }
+  ]
+}

@@ -96,7 +96,7 @@ export async function createTempProject(): Promise<TempProject> {
     allowedChangePaths: ["src"],
     forbiddenChangePaths: ["secrets"],
     assertions: [{ id: "assert-1", dimension: "functional", critical: true }],
-    transcriptRules: [{ id: "rule-1", event: "question", beforeStepId: "step-1" }],
+    transcriptRules: [{ id: "rule-1", check: "no_file_change" }],
   };
 
   const controlManifest: VariantManifest = {

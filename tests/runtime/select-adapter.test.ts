@@ -21,17 +21,21 @@ const caseManifest = {
   assertions: [{ id: "assert-1", dimension: "functional", critical: true }],
 } as unknown as CaseManifest;
 
-test("publishes the supported runtimes", () => {
-  assert.deepEqual([...supportedRuntimes], ["fake"]);
+test("lists both supported runtimes", () => {
+  assert.deepEqual([...supportedRuntimes], ["codex", "fake"]);
 });
 
-test("rejects an unknown runtime identifier", () => {
-  assert.throws(() => selectAdapter("codex", caseManifest), DependencyError);
+test("rejects an unknown runtime identifier", async () => {
+  await assert.rejects(selectAdapter("cursor", caseManifest), DependencyError);
+});
+
+test("rejects an unknown runtime with the supported list", async () => {
+  await assert.rejects(selectAdapter("cursor", caseManifest), /supported runtimes: codex, fake/);
 });
 
 test("the fake runtime produces a deterministic transcript for every prompt step", async () => {
-  const first = selectAdapter("fake", caseManifest);
-  const second = selectAdapter("fake", caseManifest);
+  const first = await selectAdapter("fake", caseManifest);
+  const second = await selectAdapter("fake", caseManifest);
   const input = {
     workspace: "/tmp/workspace",
     promptSteps: caseManifest.promptSteps,
@@ -40,6 +44,7 @@ test("the fake runtime produces a deterministic transcript for every prompt step
       reasoningEffort: "medium",
       sandbox: "workspace-write",
       limits: caseManifest.limits,
+      environment: {},
     },
     onContinuation: async () => {},
   };

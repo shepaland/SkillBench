@@ -107,6 +107,25 @@ test("rejects destination traversal before changing the workspace", async () => 
   }
 });
 
+test("rejects a \".\" install destination as an unsafe manifest path", async () => {
+  const project = await createTempProject();
+  const variant = await exampleVariant(project.root);
+  const unsafeVariant = withInstall(variant, "variants/example/skill", ".");
+  const paths = await ProjectPaths.create(project.root);
+  const workspace = await materializeWorkspace({ paths, fixture: "fixtures/queuedesk" });
+  const before = await hashTree(workspace.workspacePath);
+  try {
+    await assertFileLifecycleError(
+      () => installVariant({ variant: unsafeVariant, runtime: "codex", workspacePath: workspace.workspacePath }),
+      "UNSAFE_FILESYSTEM_INPUT",
+      /unsafe manifest path: \./,
+    );
+    assert.equal(await hashTree(workspace.workspacePath), before);
+  } finally {
+    await workspace.cleanup();
+  }
+});
+
 test("rolls back copied material when a source changes after catalog loading", async () => {
   const project = await createTempProject();
   const variant = await exampleVariant(project.root);

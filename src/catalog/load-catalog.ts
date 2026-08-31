@@ -24,7 +24,8 @@ export type CatalogIssueCode =
   | "ORACLE_MANIFEST_INVALID"
   | "ORACLE_UNAVAILABLE"
   | "SCHEMA_VALIDATION"
-  | "TRANSCRIPT_STEP_NOT_FOUND"
+  | "TRANSCRIPT_RULE_NOT_FOUND"
+  | "TRANSCRIPT_RULE_REUSED"
   | "VARIANT_HASH_MISMATCH"
   | "VARIANT_SOURCE_UNAVAILABLE";
 
@@ -237,24 +238,29 @@ async function validateCase(
 
   let fixturePath: string | undefined;
   let fixtureHash: ContentHash | undefined;
-  try {
-    fixturePath = await paths.resolveExisting(manifest.fixture.path, "directory");
-    fixtureHash = await hashTree(fixturePath);
-    if (fixtureHash !== manifest.fixture.contentHash) {
+  const misplacedFixture = fixtureLocationIssue(manifest.fixture.path);
+  if (misplacedFixture !== undefined) {
+    addIssue(issues, source, "FIXTURE_UNAVAILABLE", misplacedFixture);
+  } else {
+    try {
+      fixturePath = await paths.resolveExisting(manifest.fixture.path, "directory");
+      fixtureHash = await hashTree(fixturePath);
+      if (fixtureHash !== manifest.fixture.contentHash) {
+        addIssue(
+          issues,
+          source,
+          "FIXTURE_HASH_MISMATCH",
+          `fixture ${JSON.stringify(manifest.fixture.path)} has hash ${fixtureHash}; expected ${manifest.fixture.contentHash}`,
+        );
+      }
+    } catch (error: unknown) {
       addIssue(
         issues,
         source,
-        "FIXTURE_HASH_MISMATCH",
-        `fixture ${JSON.stringify(manifest.fixture.path)} has hash ${fixtureHash}; expected ${manifest.fixture.contentHash}`,
+        "FIXTURE_UNAVAILABLE",
+        `fixture ${JSON.stringify(manifest.fixture.path)} is unavailable: ${errorMessage(error)}`,
       );
     }
-  } catch (error: unknown) {
-    addIssue(
-      issues,
-      source,
-      "FIXTURE_UNAVAILABLE",
-      `fixture ${JSON.stringify(manifest.fixture.path)} is unavailable: ${errorMessage(error)}`,
-    );
   }
 
   let oraclePath: string | undefined;
@@ -311,6 +317,24 @@ async function validateCase(
   return compactCase({ source, manifest, fixturePath, fixtureHash, oraclePath, oracleHash });
 }
 
+/**
+ * A fixture must name a directory inside `fixtures/` before anything resolves or hashes
+ * it. Path parsing drops "." segments, so `"."` and `"fixtures/."` resolve to a real
+ * directory that is no fixture — and hashing the project root walks `.private/` and
+ * `node_modules/` before the hash mismatch is reported. `materializeWorkspace` refuses
+ * such a path independently; this keeps `validate` from walking it in the first place.
+ */
+function fixtureLocationIssue(path: string): string | undefined {
+  const segments = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length < 2 || segments[0] !== "fixtures") {
+    return `fixture ${JSON.stringify(path)} must name a directory inside fixtures/`;
+  }
+  return undefined;
+}
+
 function validateUniqueIds(
   values: readonly { readonly id: string }[],
   code: "DUPLICATE_ASSERTION_ID" | "DUPLICATE_PROMPT_STEP_ID" | "DUPLICATE_TRANSCRIPT_RULE_ID",
@@ -334,8 +358,8 @@ function validateTranscriptReferences(
   source: string,
   issues: CatalogIssue[],
 ): void {
-  const promptStepIds = new Set(manifest.promptSteps.map(({ id }) => id));
   const transcriptRuleIds = new Set((manifest.transcriptRules ?? []).map(({ id }) => id));
+  const referencedBy = new Map<string, string>();
 
   for (const step of manifest.promptSteps) {
     for (const ruleId of step.continuation?.eventRuleIds ?? []) {
@@ -346,20 +370,47 @@ function validateTranscriptReferences(
           "CONTINUATION_RULE_NOT_FOUND",
           `prompt step ${JSON.stringify(step.id)} references missing transcript rule ${JSON.stringify(ruleId)}`,
         );
+        continue;
       }
+      claimRule(ruleId, `prompt step ${JSON.stringify(step.id)}`, referencedBy, source, issues);
     }
   }
 
-  for (const rule of manifest.transcriptRules ?? []) {
-    if (rule.beforeStepId !== undefined && !promptStepIds.has(rule.beforeStepId)) {
+  const gradedBy = new Map<string, string>();
+  for (const assertion of manifest.assertions) {
+    const ruleId = assertion.transcriptRuleId;
+    if (ruleId === undefined) continue;
+    if (!transcriptRuleIds.has(ruleId)) {
       addIssue(
         issues,
         source,
-        "TRANSCRIPT_STEP_NOT_FOUND",
-        `transcript rule ${JSON.stringify(rule.id)} references missing prompt step ${JSON.stringify(rule.beforeStepId)}`,
+        "TRANSCRIPT_RULE_NOT_FOUND",
+        `assertion ${JSON.stringify(assertion.id)} references missing transcript rule ${JSON.stringify(ruleId)}`,
       );
+      continue;
     }
+    claimRule(ruleId, `assertion ${JSON.stringify(assertion.id)}`, gradedBy, source, issues);
   }
+}
+
+function claimRule(
+  ruleId: string,
+  claimant: string,
+  claims: Map<string, string>,
+  source: string,
+  issues: CatalogIssue[],
+): void {
+  const existing = claims.get(ruleId);
+  if (existing === undefined) {
+    claims.set(ruleId, claimant);
+    return;
+  }
+  addIssue(
+    issues,
+    source,
+    "TRANSCRIPT_RULE_REUSED",
+    `transcript rule ${JSON.stringify(ruleId)} is claimed by ${existing} and ${claimant}`,
+  );
 }
 
 function validateChangePathIntersections(

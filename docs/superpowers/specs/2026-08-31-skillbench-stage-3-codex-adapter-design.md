@@ -128,9 +128,16 @@ rule:
   moment.
 - A rule referenced by no continuation is evaluated **once**, after the session closes,
   over the complete transcript.
+- A gated rule whose continuation point is never reached — the run ends early because
+  the budget is exhausted or a step exits non-zero before that step's continuation
+  fires — falls back to the same session-close evaluation, over the complete
+  transcript, rather than going unevaluated.
 
-One evaluation per rule means the answer used as a stop condition and the answer that
-reaches the report are the same value by construction; they cannot diverge.
+Every rule is still evaluated exactly once, so the answer used as a stop condition and
+the answer that reaches the report are always the same value by construction; they
+cannot diverge. What changes with the fallback is only which window that one evaluation
+uses: normally the narrower continuation-point window, but the wider whole-transcript
+window when the run ends before that point is reached.
 
 The current `beforeStepId` field is removed from the rule. It expressed the same window
 less directly and required cross-field validation to stay consistent.
@@ -293,7 +300,8 @@ Robustness rules:
 - an unrecognized or malformed line is counted as unparsed and preserved in the raw
   evidence; it never fails the run;
 - a missing session identifier after the first step **is** a failure, with a clear
-  message, because the next step has nowhere to go;
+  message, because the next step has nowhere to go; a case with a single prompt step
+  has no next step, so it is not a failure there;
 - the raw stream of each step is written to evidence before parsing, so a parser defect
   never destroys the underlying data.
 
@@ -357,9 +365,10 @@ no longer attributed to the adapter. This closes a deferred item from Stage 2B.
 
 `executeRun` implements `onContinuation`: it evaluates the rules the step references,
 appends their outcomes to a collected list, and returns. After execution it evaluates
-the remaining unreferenced rules over the full transcript, converts rule outcomes into
-assertion results for assertions carrying `transcriptRuleId`, and merges them with the
-oracle results.
+every rule still without an outcome — rules no continuation references, and gated rules
+whose continuation point was never reached because the run ended early — over the full
+transcript, converts rule outcomes into assertion results for assertions carrying
+`transcriptRuleId`, and merges them with the oracle results.
 
 `selectAdapter` becomes asynchronous because the Codex runtime version is obtained by
 invoking the runtime. `resolveRunTargets` and `runRun` await it. This means `dry-run
@@ -379,13 +388,21 @@ runs/<case>/<variant>/<run-id>/
   changes.json
   result.json
   raw/step-<step-id>.jsonl
+  raw/step-<step-id>.err.log
 ```
 
-`transcript.json` additionally records, per step, the raw file name, the count of
-unparsed lines, and the rule outcomes evaluated at that step's continuation point.
+The child's standard output and its error output are preserved in separate files. Both
+count against the output budget, and the error output is where a rejected model, an
+expired login, or an option this runtime version does not accept is explained; mixing
+plain text into the JSON Lines file would corrupt it.
+
+`transcript.json` additionally records the runtime's reported events, process result,
+token usage, and elapsed time; one aggregate count of unparsed lines across the whole
+run; and the outcome of every declared transcript rule as one flat list, not grouped by
+step. It records no raw file names; those exist only as the files listed above.
 Raw files are written directly rather than through the immutable JSON store, which
 accepts JSON documents only. A runtime that produces no stream, such as the fake
-adapter, writes no `raw/` directory and records no raw file name.
+adapter, writes no `raw/` directory.
 
 ## CLI
 

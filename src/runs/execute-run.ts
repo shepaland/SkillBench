@@ -1,8 +1,8 @@
 import type { CatalogCase, CatalogVariant } from "../catalog/load-catalog.js";
 import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
-import type { RuntimeLimits } from "../domain/model.js";
+import type { AssertionDeclaration, TranscriptRule } from "../domain/model.js";
 import { hashTree } from "../integrity/content-hash.js";
-import type { RuntimeAdapter, RuntimeExecution, TranscriptEvent } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapter, RuntimeExecution } from "../runtime/runtime-adapter.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
 import { loadOracleManifest } from "../oracles/oracle-manifest.js";
 import { runOracle, type AssertionResult } from "../oracles/run-oracle.js";
@@ -21,6 +21,7 @@ import {
   type ChangeSet,
   type TreeSnapshot,
 } from "./snapshot.js";
+import { evaluateRules, type TranscriptRuleOutcome } from "./transcript-rules.js";
 
 export interface ExecuteRunInput {
   readonly paths: ProjectPaths;
@@ -54,7 +55,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     repetitionIndex: input.repetitionIndex,
     runId: input.runId,
   });
-  const writer = new RunEvidenceWriter(input.store, manifest);
+  const writer = new RunEvidenceWriter(input.store, manifest, input.paths);
   await writer.writeManifest();
 
   let workspace: MaterializedWorkspace | undefined;
@@ -70,6 +71,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   let failureMessage = "";
   let preservedWorkspacePath: string | null = null;
   const cleanupFailures: string[] = [];
+  const ruleOutcomes: TranscriptRuleOutcome[] = [];
+  const rules: readonly TranscriptRule[] = input.catalogCase.manifest.transcriptRules ?? [];
 
   try {
     workspace = await materializeWorkspace({
@@ -88,13 +91,15 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     step = "baseline_snapshot";
     baseline = await snapshotTree(workspace.workspacePath);
 
-    step = "execute";
+    step = "oracle_setup";
     lifecycle = await OracleLifecycle.create({
       paths: input.paths,
       caseId: input.catalogCase.manifest.id,
       workspacePath: workspace.workspacePath,
       ...(input.tempParent === undefined ? {} : { tempParent: input.tempParent }),
     });
+
+    step = "execute";
     execution = await input.adapter.execute({
       workspace: workspace.workspacePath,
       promptSteps: input.catalogCase.manifest.promptSteps,
@@ -103,10 +108,25 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
         reasoningEffort: input.configuration.reasoningEffort,
         sandbox: input.configuration.sandbox,
         limits: input.catalogCase.manifest.limits,
+        environment: input.variant.manifest.environment,
       },
-      onContinuation: async () => {},
+      onContinuation: (continuedStep, events) => {
+        const gated = rules.filter((rule) => (continuedStep.continuation?.eventRuleIds ?? []).includes(rule.id));
+        ruleOutcomes.push(...evaluateRules(gated, events));
+        return Promise.resolve();
+      },
+      onRawLine: (stepId, line, stream) => { writer.appendRawLine(stepId, line, stream); },
     });
-    await writer.writeTranscript(execution);
+    // Every rule still without an outcome is evaluated here, over the full transcript:
+    // rules no continuation references, and gated rules whose continuation point was
+    // never reached because the session ended early. A rule already evaluated at its
+    // continuation keeps that answer, so no rule is ever evaluated twice.
+    const evaluatedRuleIds = new Set(ruleOutcomes.map((outcome) => outcome.ruleId));
+    ruleOutcomes.push(...evaluateRules(
+      rules.filter((rule) => !evaluatedRuleIds.has(rule.id)),
+      execution.events,
+    ));
+    await writer.writeTranscript(execution, ruleOutcomes);
 
     step = "final_snapshot";
     changes = diffSnapshots(baseline, await snapshotTree(workspace.workspacePath));
@@ -128,22 +148,43 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       );
     }
     const oracleManifest = await loadOracleManifest(mounted.gradingPath, input.validator);
-    assertions = await runOracle({
+    const oracleResults = await runOracle({
       manifest: oracleManifest,
-      assertions: input.catalogCase.manifest.assertions,
+      assertions: input.catalogCase.manifest.assertions.filter(
+        ({ transcriptRuleId }) => transcriptRuleId === undefined,
+      ),
       gradingPath: mounted.gradingPath,
       workspacePath: workspace.workspacePath,
     });
+    assertions = mergeAssertions(input.catalogCase.manifest.assertions, oracleResults, ruleOutcomes);
 
     step = "verify_fixture";
     await workspace.verifySource();
 
-    status = isExhausted(execution, input.catalogCase.manifest.limits) ? "exhausted" : "completed";
+    if (execution.exhaustion !== null) {
+      status = "exhausted";
+    } else if (execution.process.exitCode !== null && execution.process.exitCode !== 0) {
+      status = "errored";
+      failedStep = "execute";
+      failureMessage = `the runtime exited with code ${execution.process.exitCode.toString()}`;
+    } else if (execution.process.signal !== null) {
+      status = "errored";
+      failedStep = "execute";
+      failureMessage = `the runtime was terminated by signal ${execution.process.signal}`;
+    } else {
+      status = "completed";
+    }
   } catch (error: unknown) {
     status = "errored";
     failedStep = step;
     failureMessage = errorMessage(error);
   } finally {
+    for (const failure of await writer.flushRawLines()) {
+      cleanupFailures.push(`raw evidence: ${failure}`);
+    }
+    // Cleanup the adapter could not complete is recorded like any other cleanup
+    // failure: it belongs beside the run outcome, never in place of it.
+    cleanupFailures.push(...execution?.cleanupFailures ?? []);
     const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
     if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
     if (input.keepWorkspace === true) {
@@ -162,6 +203,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     failedStep,
     failureMessage,
     assertions,
+    transcriptRuleOutcomes: Object.freeze([...ruleOutcomes]),
     changes,
     changePathObservations: observations,
     costs: Object.freeze({
@@ -183,25 +225,35 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   return result;
 }
 
-function isExhausted(execution: RuntimeExecution, limits: RuntimeLimits): boolean {
-  if (execution.process.timedOut) return true;
-  if (execution.process.signal !== null) return true;
-  if (execution.elapsedMs >= limits.wallClockMs) return true;
-  if (execution.usage !== null &&
-    execution.usage.inputTokens + execution.usage.outputTokens >= limits.tokenLimit) {
-    return true;
-  }
-  return outputBytes(execution.events) >= limits.outputBytes;
-}
+function mergeAssertions(
+  declarations: readonly AssertionDeclaration[],
+  oracleResults: readonly AssertionResult[],
+  outcomes: readonly TranscriptRuleOutcome[],
+): readonly AssertionResult[] {
+  const oracleById = new Map(oracleResults.map((result) => [result.assertionId, result]));
+  const outcomeById = new Map(outcomes.map((outcome) => [outcome.ruleId, outcome]));
 
-function outputBytes(events: readonly TranscriptEvent[]): number {
-  let total = 0;
-  for (const event of events) {
-    if (event.type === "assistant_message" || event.type === "completion_claim") {
-      total += Buffer.byteLength(event.text, "utf8");
+  return Object.freeze(declarations.map((declaration) => {
+    if (declaration.transcriptRuleId === undefined) {
+      const result = oracleById.get(declaration.id);
+      if (result === undefined) {
+        throw new Error(`assertion ${declaration.id} has no oracle result after coverage validation`);
+      }
+      return result;
     }
-  }
-  return total;
+
+    const outcome = outcomeById.get(declaration.transcriptRuleId);
+    return Object.freeze({
+      assertionId: declaration.id,
+      dimension: declaration.dimension,
+      critical: declaration.critical,
+      outcome: outcome === undefined ? "error" : outcome.satisfied ? "passed" : "failed",
+      exitCode: null,
+      durationMs: 0,
+      detail: outcome?.detail ?? `transcript rule ${declaration.transcriptRuleId} was never evaluated`,
+      source: "transcript",
+    } as const);
+  }));
 }
 
 function countUnplannedUserTurns(

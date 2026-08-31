@@ -33,7 +33,7 @@ export async function runRun(
       catalogCase: targets.catalogCase,
       variant: targets.variant,
       configuration: targets.configuration,
-      adapter: selectAdapter(options.runtime, targets.catalogCase.manifest).adapter,
+      adapter: (await selectAdapter(options.runtime, targets.catalogCase.manifest)).adapter,
       runId: createRunId(clock(), suffix()),
       repetitionIndex,
       keepWorkspace: options.keepWorkspace,

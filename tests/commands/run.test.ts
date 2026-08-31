@@ -53,6 +53,19 @@ test("a passing run reports completed and writes one run directory", async () =>
   assert.equal(directories.length, 1);
 });
 
+test("a run against the fake runtime writes no raw/ directory", async () => {
+  const project = await createTempProject();
+  const { io } = createIo();
+
+  await runRun(options(project.root), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes());
+
+  const runDirectories = await readdir(join(project.root, "runs/F01/example"));
+  assert.equal(runDirectories.length, 1);
+  const runDirectory = join(project.root, "runs/F01/example", runDirectories[0] ?? "");
+  const entries = await readdir(runDirectory);
+  assert.ok(!entries.includes("raw"));
+});
+
 test("--runs 3 produces three independent run directories", async () => {
   const project = await createTempProject();
   const { io } = createIo();
@@ -182,6 +195,35 @@ test("--keep-workspace preserves the workspace and prints its path", async () =>
   await rm(dirname(preserved ?? ""), { recursive: true, force: true });
   const printed = /workspace preserved at (?<path>.+)\n/u.exec(text.stdout())?.groups?.["path"] ?? "";
   await rm(dirname(printed), { recursive: true, force: true });
+});
+
+test("an oracle check with workingDirectory \".\" grades successfully against the fake runtime", async () => {
+  const project = await createTempProject();
+  // Placed at the oracle root itself (not under checks/) so that "." is the
+  // only path that can find it once the oracle is mounted into a grading area.
+  await writeFile(join(project.oracleDirectory, "root-check.js"), "process.exit(0);\n");
+  await writeJson(join(project.oracleDirectory, "oracle.json"), {
+    schemaVersion: 1,
+    caseId: "F01",
+    checks: [
+      {
+        assertionId: "assert-1",
+        command: { executor: "node", args: ["root-check.js"] },
+        workingDirectory: ".",
+        timeoutMs: 10_000,
+      },
+    ],
+  });
+  const { io, stdout } = createIo();
+
+  await runRun(options(project.root, { json: true }), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes());
+
+  const parsed = JSON.parse(stdout()) as { runs: { status: string; failedCriticalAssertions: string[] }[] };
+  assert.equal(parsed.runs.length, 1);
+  for (const entry of parsed.runs) {
+    assert.equal(entry.status, "completed");
+    assert.deepEqual(entry.failedCriticalAssertions, []);
+  }
 });
 
 test(

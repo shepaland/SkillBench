@@ -53,7 +53,8 @@ test("fake adapter emits a deterministic two-step transcript and continues betwe
       model: "test-model",
       reasoningEffort: "low",
       sandbox: "read-only",
-      limits: { wallClockMs: 60_000, outputBytes: 1_000_000, tokenLimit: 1_000 }
+      limits: { wallClockMs: 60_000, outputBytes: 1_000_000, tokenLimit: 1_000 },
+      environment: {}
     },
     onContinuation: (step, events) => {
       continuations.push({ stepId: step.id, events });
@@ -125,7 +126,8 @@ function createInput(): RuntimeInput {
       model: "test-model",
       reasoningEffort: "low",
       sandbox: "read-only",
-      limits: { wallClockMs: 60_000, outputBytes: 1_000_000, tokenLimit: 1_000 }
+      limits: { wallClockMs: 60_000, outputBytes: 1_000_000, tokenLimit: 1_000 },
+      environment: {}
     },
     onContinuation: () => Promise.resolve()
   };
@@ -156,4 +158,59 @@ test("fake adapter rejects scripts with an extra step ID", async () => {
     ])).execute(createInput()),
     /script step IDs must exactly match prompt step IDs/,
   );
+});
+
+test("emits file change events and an exhaustion cause from the script", async () => {
+  const adapter = new FakeAdapter({
+    steps: [{
+      stepId: "s1",
+      events: [
+        { type: "file_change", afterMs: 5, paths: ["src/a.js"], outsidePaths: [] },
+        { type: "completion_claim", afterMs: 5, text: "done" },
+      ],
+    }],
+    closeAfterMs: 1,
+    process: { exitCode: 0, signal: null, timedOut: false },
+    usage: { inputTokens: 1, outputTokens: 1 },
+    exhaustion: "token_limit",
+    metadata: { runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+  });
+
+  const execution = await adapter.execute({
+    workspace: "/tmp/workspace",
+    promptSteps: [{ id: "s1", prompt: "go" }],
+    config: {
+      model: "m", reasoningEffort: "low", sandbox: "workspace-write",
+      limits: { wallClockMs: 1000, outputBytes: 1000, tokenLimit: 1000 },
+      environment: {},
+    },
+    onContinuation: async () => {},
+  });
+
+  const change = execution.events.find((event) => event.type === "file_change");
+  assert.deepEqual(change, { type: "file_change", atMs: 5, paths: ["src/a.js"], outsidePaths: [] });
+  assert.equal(execution.exhaustion, "token_limit");
+});
+
+test("reports no exhaustion cause when the script omits one", async () => {
+  const adapter = new FakeAdapter({
+    steps: [{ stepId: "s1", events: [] }],
+    closeAfterMs: 1,
+    process: { exitCode: 0, signal: null, timedOut: false },
+    usage: null,
+    metadata: { runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+  });
+
+  const execution = await adapter.execute({
+    workspace: "/tmp/workspace",
+    promptSteps: [{ id: "s1", prompt: "go" }],
+    config: {
+      model: "m", reasoningEffort: "low", sandbox: "workspace-write",
+      limits: { wallClockMs: 1000, outputBytes: 1000, tokenLimit: 1000 },
+      environment: {},
+    },
+    onContinuation: async () => {},
+  });
+
+  assert.equal(execution.exhaustion, null);
 });

@@ -32,7 +32,7 @@ async function createWriter() {
     runId: "20260830T175302Z-a1b2c3",
   });
   const paths = await ProjectPaths.create(project.root);
-  const writer = new RunEvidenceWriter(new ImmutableJsonStore(paths), manifest);
+  const writer = new RunEvidenceWriter(new ImmutableJsonStore(paths), manifest, paths);
   return { project, manifest, writer };
 }
 
@@ -54,6 +54,24 @@ test("writing the same manifest twice is idempotent", async () => {
   await writer.writeManifest();
 });
 
+test("appendRawLine serializes many rapid calls into one ordered file and flushRawLines reports no failures", async () => {
+  const { project, writer } = await createWriter();
+
+  const lineCount = 50;
+  const lines = Array.from({ length: lineCount }, (_, index) => `{"line":${index.toString()}}`);
+  // Fired without awaiting between calls, so every write races to append before the
+  // previous one has necessarily settled. Without the internal promise-queue
+  // serialization, concurrent appendFile calls could interleave or drop lines.
+  for (const line of lines) {
+    writer.appendRawLine("s1", line, "stdout");
+  }
+  const failures = await writer.flushRawLines();
+
+  assert.deepEqual(failures, []);
+  const written = await readFile(join(project.root, writer.directory, "raw/step-s1.jsonl"), "utf8");
+  assert.equal(written, `${lines.join("\n")}\n`);
+});
+
 test("writes transcript, changes, and result as separate records", async () => {
   const { project, manifest, writer } = await createWriter();
   const result: RunResult = {
@@ -71,7 +89,9 @@ test("writes transcript, changes, and result as separate records", async () => {
       exitCode: 0,
       durationMs: 5,
       detail: "",
+      source: "oracle",
     }],
+    transcriptRuleOutcomes: [],
     changes: { added: [], modified: ["src/index.js"], removed: [] },
     changePathObservations: { outsideAllowed: [], insideForbidden: [] },
     costs: { inputTokens: 10, outputTokens: 20, wallClockMs: 30, unplannedUserTurns: 0 },
@@ -86,7 +106,9 @@ test("writes transcript, changes, and result as separate records", async () => {
     usage: { inputTokens: 10, outputTokens: 20 },
     elapsedMs: 30,
     metadata: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
-  });
+    exhaustion: null,
+    unparsedLines: 0,
+  }, []);
   await writer.writeChanges(result.changes, result.changePathObservations);
   await writer.writeResult(result);
 
@@ -117,14 +139,16 @@ test("detects a failed critical assertion and ignores a failed non-critical one"
   assert.equal(
     hasFailedCriticalAssertion({
       ...base,
-      assertions: [{ assertionId: "a", dimension: "functional", critical: false, outcome: "failed", exitCode: 1, durationMs: 1, detail: "" }],
+      assertions: [{ assertionId: "a", dimension: "functional", critical: false, outcome: "failed", exitCode: 1, durationMs: 1, detail: "", source: "oracle" }],
+      transcriptRuleOutcomes: [],
     }),
     false,
   );
   assert.equal(
     hasFailedCriticalAssertion({
       ...base,
-      assertions: [{ assertionId: "a", dimension: "functional", critical: true, outcome: "error", exitCode: null, durationMs: 1, detail: "" }],
+      assertions: [{ assertionId: "a", dimension: "functional", critical: true, outcome: "error", exitCode: null, durationMs: 1, detail: "", source: "oracle" }],
+      transcriptRuleOutcomes: [],
     }),
     true,
   );

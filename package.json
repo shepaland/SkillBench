@@ -9,8 +9,9 @@
     "build": "tsc -p tsconfig.json && node -e \"if (process.platform !== 'win32') require('node:fs').chmodSync('dist/src/cli.js', 0o755)\"",
     "check": "npm run lint && npm run typecheck && npm test",
     "lint": "eslint src tests",
-    "test": "node --import tsx --test tests/**/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test": "node --import tsx --test 'tests/**/*.test.ts'",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke:codex": "node scripts/smoke-codex.mjs"
   },
   "dependencies": {
     "ajv": "8.17.1",

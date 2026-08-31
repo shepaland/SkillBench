@@ -15,13 +15,13 @@ The primary metric is `solve_rate`. Diagnostic metrics are `correctness`, `regre
 
 ## Current State
 
-- Stage 1, Stage 2A, and Stage 2B are complete.
+- Stage 1, Stage 2A, Stage 2B, and Stage 3 are complete.
 - `validate`, `list`, `dry-run`, and `run` are implemented. `compare` and `report` remain reserved commands and currently return exit code `2`.
-- `validate` checks the catalog and, unless `--public-only` is used, loads each case's private oracle manifest and confirms it covers exactly the declared assertions.
+- `validate` checks the catalog and, unless `--public-only` is used, loads each case's private oracle manifest and confirms it covers exactly the declared assertions without a `transcriptRuleId`.
 - `list` prints the cases and variants in a project, with a `--json` option for machine-readable output.
-- `dry-run` freezes every input for a run and prints the execution plan without materializing a workspace or starting an agent.
-- `run` executes one or more independent runs end to end against a deterministic built-in fake runtime; no live coding agent is connected yet.
-- The next delivery stage is Stage 3: the Codex adapter and multi-step prompt execution.
+- `dry-run` freezes every input for a run and prints the execution plan without materializing a workspace or starting an agent. `dry-run --runtime codex` still requires an installed runtime, because the frozen manifest records the runtime version.
+- `run` executes against the deterministic fake runtime and against a live Codex session selected with `--runtime codex`.
+- The next delivery stage is Stage 4, the QueueDesk fixture.
 - There are no committed public cases or variants yet. Successful validation of this repository with `--public-only` reports `0` cases and `0` variants.
 
 Do not describe planned functionality as already implemented. Update this section whenever a delivery stage changes the real CLI behavior.
@@ -30,6 +30,7 @@ Do not describe planned functionality as already implemented. Update this sectio
 
 - Stage 2A development used the isolated worktree `.worktrees/stage2a-file-lifecycles` on branch `stage2a-file-lifecycles`.
 - Stage 2B development used the isolated worktree `.worktrees/stage2b-run-orchestration` on branch `stage2b-run-orchestration`.
+- Stage 3 development used the isolated worktree `.worktrees/stage3-codex-adapter` on branch `stage3-codex-adapter`.
 
 ## Technology and Commands
 
@@ -60,7 +61,9 @@ node dist/src/cli.js validate --project . --public-only
 - `src/paths/` owns safe project-path resolution.
 - `schemas/` contains the published case, variant, and oracle JSON Schemas; `src/schemas/` validates data against them.
 - `src/storage/` contains immutable JSON storage.
-- `src/runtime/` defines the adapter boundary and deterministic fake adapter; `src/runtime/select-adapter.ts` maps a runtime identifier to an adapter.
+- `src/runtime/` defines the adapter boundary and deterministic fake adapter; `src/runtime/select-adapter.ts` maps a runtime identifier to an adapter, asynchronously, and reports its runtime version.
+- `src/runtime/codex/` implements the `codex` runtime adapter: `codex-adapter.ts` is the `RuntimeAdapter` implementation itself, built from command construction (`build-command.ts`), stream parsing (`parse-events.ts`), reported-shell-command normalization (`normalize-command.ts`), a per-run isolated runtime home (`codex-home.ts`), and runtime version discovery (`codex-version.ts`).
+- `src/runs/transcript-rules.ts` evaluates typed transcript rules — a closed set of five checks — as a pure function of the recorded event list.
 - `src/catalog/` loads and cross-validates catalogs.
 - `src/commands/` and `src/cli/` implement CLI behavior.
 - `tests/` mirrors these responsibilities with unit and command-level tests.
@@ -84,6 +87,10 @@ Keep case definitions independent of a specific agent runtime. Keep skills as da
 - The immutable JSON store protects sequential writes, but concurrent writers can race because standard POSIX `rename` may replace an existing destination.
 - Manifest discovery currently looks exactly one directory below `cases/` and `variants/`.
 - `--public-only` skips only private-oracle availability checks; it must not skip schema, reference, hash, or path validation.
-- Runs execute sequentially. The fake runtime produces a scripted transcript that does not modify the workspace, so an end-to-end run exercises the pipeline rather than agent behavior.
+- Runs execute sequentially. Exhaustion (`wall_clock`, `output_bytes`, `token_limit`, or `signal`) is now classified by the adapter itself, from real evidence, not guessed by the core.
+- A file edited through a shell command rather than the runtime's own edit tool produces no `file_change` transcript event. The final tree comparison still detects the change for scope metrics, but transcript rules do not see it.
+- Command normalization does not implement shell grammar. Quoting is handled only as stripped matched quotes around a token; subshells, redirections, and expansions are not interpreted.
+- Stream parsing is pinned to the observed event shape of one runtime version. A different version may produce unparsed lines; the run still completes and the raw stream is preserved, but transcript rules may see fewer events. The frozen `runtimeVersion` already prevents comparing runs across versions.
+- Wall-clock and output budgets are enforced by the adapter, so a child that ignores a termination signal is only stopped by the subsequent kill signal.
 
 If a later stage resolves one of these limitations, update this file and the README in the same change.

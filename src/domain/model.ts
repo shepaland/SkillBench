@@ -23,7 +23,21 @@ export interface AssertionDeclaration {
   readonly id: string;
   readonly dimension: "functional" | "regression" | "security" | "scope" | "process";
   readonly critical: boolean;
+  /** When set, SkillBench grades this assertion from the named rule and the oracle must not cover it. */
+  readonly transcriptRuleId?: string;
 }
+
+export interface CommandMatcher {
+  readonly executor: string;
+  readonly argsPrefix: readonly string[];
+}
+
+export type TranscriptRule =
+  | { readonly id: string; readonly check: "no_file_change"; readonly expect?: boolean }
+  | { readonly id: string; readonly check: "assistant_message"; readonly expect?: boolean }
+  | ({ readonly id: string; readonly check: "command_ran"; readonly expect?: boolean } & CommandMatcher)
+  | ({ readonly id: string; readonly check: "command_before_file_change"; readonly expect?: boolean } & CommandMatcher)
+  | ({ readonly id: string; readonly check: "command_after_file_change"; readonly expect?: boolean } & CommandMatcher);
 
 export interface CaseManifest {
   readonly schemaVersion: 1;
@@ -37,11 +51,7 @@ export interface CaseManifest {
   readonly allowedChangePaths: readonly string[];
   readonly forbiddenChangePaths: readonly string[];
   readonly assertions: readonly AssertionDeclaration[];
-  readonly transcriptRules?: readonly {
-    readonly id: string;
-    readonly event: string;
-    readonly beforeStepId?: string;
-  }[];
+  readonly transcriptRules?: readonly TranscriptRule[];
 }
 
 export interface VariantManifest {

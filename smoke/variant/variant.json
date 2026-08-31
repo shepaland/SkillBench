@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "control",
+  "displayName": "Control",
+  "compatibleRuntimes": ["codex"],
+  "installs": [],
+  "claimedCategories": ["bounded-feature"],
+  "environment": {},
+  "contentHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

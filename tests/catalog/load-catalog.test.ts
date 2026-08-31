@@ -46,6 +46,26 @@ test("reports a fixture that cannot be resolved", async () => {
   assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["FIXTURE_UNAVAILABLE"]);
 });
 
+test("reports a fixture path that does not name a directory inside fixtures/", async () => {
+  // Each of these resolves to a real directory that is not a fixture. Reporting them
+  // before resolution matters: hashing "." would walk the whole project root, private
+  // oracles included, only to end in a hash mismatch.
+  for (const path of [".", "fixtures", "fixtures/."]) {
+    const project = await createTempProject();
+    await writeJson(project.caseManifestPath, {
+      ...project.caseManifest,
+      fixture: { ...project.caseManifest.fixture, path },
+    });
+
+    const catalog = await loadCatalog(project.root);
+
+    assert.deepEqual(issueCodes(catalog.issues), ["FIXTURE_UNAVAILABLE"], `for fixture path ${path}`);
+    assert.match(catalog.issues[0]?.message ?? "", /must name a directory inside fixtures\//u);
+    assert.equal(catalog.cases[0]?.fixturePath, undefined);
+    assert.equal(catalog.cases[0]?.fixtureHash, undefined);
+  }
+});
+
 test("reports a fixture whose tree no longer matches its declared hash", async () => {
   const project = await createTempProject();
   await writeFile(join(project.fixtureDirectory, "unexpected.js"), "export const changed = true;\n");
@@ -65,24 +85,89 @@ test("reports assertion identifiers duplicated with different declarations", asy
   assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["DUPLICATE_ASSERTION_ID"]);
 });
 
-test("reports continuation references to absent rules and prompt steps independently", async () => {
+test("reports continuation references to absent transcript rules", async () => {
   const project = await createTempProject();
   const promptStep = project.caseManifest.promptSteps[0];
-  const transcriptRule = project.caseManifest.transcriptRules?.[0];
   assert.ok(promptStep);
-  assert.ok(transcriptRule);
   await writeJson(project.caseManifestPath, {
     ...project.caseManifest,
     promptSteps: [
       { ...promptStep, continuation: { eventRuleIds: ["missing-rule"] } },
     ],
-    transcriptRules: [{ ...transcriptRule, beforeStepId: "missing-step" }],
   });
 
   assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
     "CONTINUATION_RULE_NOT_FOUND",
-    "TRANSCRIPT_STEP_NOT_FOUND",
   ]);
+});
+
+test("reports an assertion referencing an absent transcript rule", async () => {
+  const project = await createTempProject();
+  const assertion = project.caseManifest.assertions[0];
+  assert.ok(assertion);
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    assertions: [
+      assertion,
+      { id: "assert-2", dimension: "process", critical: false, transcriptRuleId: "missing-rule" },
+    ],
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
+    "TRANSCRIPT_RULE_NOT_FOUND",
+  ]);
+});
+
+test("reports two assertions claiming the same transcript rule", async () => {
+  const project = await createTempProject();
+  const assertion = project.caseManifest.assertions[0];
+  assert.ok(assertion);
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    transcriptRules: [
+      ...(project.caseManifest.transcriptRules ?? []),
+      { id: "rule-2", check: "assistant_message" },
+    ],
+    assertions: [
+      assertion,
+      { id: "assert-2", dimension: "process", critical: false, transcriptRuleId: "rule-2" },
+      { id: "assert-3", dimension: "process", critical: false, transcriptRuleId: "rule-2" },
+    ],
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
+    "TRANSCRIPT_RULE_REUSED",
+  ]);
+});
+
+test("reports two prompt step continuations claiming the same transcript rule", async () => {
+  const project = await createTempProject();
+  const promptStep = project.caseManifest.promptSteps[0];
+  assert.ok(promptStep);
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    promptSteps: [
+      promptStep,
+      { id: "step-2", prompt: "Continue.", continuation: { eventRuleIds: ["rule-1"] } },
+    ],
+  });
+
+  assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
+    "TRANSCRIPT_RULE_REUSED",
+  ]);
+});
+
+test("a transcript rule referenced by neither a continuation nor an assertion produces no issue", async () => {
+  const project = await createTempProject();
+  await writeJson(project.caseManifestPath, {
+    ...project.caseManifest,
+    transcriptRules: [
+      ...(project.caseManifest.transcriptRules ?? []),
+      { id: "rule-unused", check: "assistant_message" },
+    ],
+  });
+
+  assert.deepEqual((await loadCatalog(project.root)).issues, []);
 });
 
 test("requires a non-empty private oracle by default but permits public-only validation", async () => {

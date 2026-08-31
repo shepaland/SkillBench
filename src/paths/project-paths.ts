@@ -85,14 +85,20 @@ function parseManifestPath(relativePath: string): string[] {
     throw new ValidationError("manifest path must be relative");
   }
 
-  const segments = normalized.split("/");
-  for (const segment of segments) {
+  // A "." segment is a no-op, not an escape: it is dropped so that "." alone
+  // resolves to the project root and "a/./b" resolves identically to "a/b".
+  const segments: string[] = [];
+  for (const segment of normalized.split("/")) {
     if (segment === "..") {
       throw new ValidationError(`manifest path escapes project root: ${relativePath}`);
     }
-    if (segment === "" || segment === ".") {
+    if (segment === "") {
       throw new ValidationError(`manifest path contains an invalid segment: ${relativePath}`);
     }
+    if (segment === ".") {
+      continue;
+    }
+    segments.push(segment);
   }
 
   return segments;
