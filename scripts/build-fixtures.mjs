@@ -10,10 +10,7 @@ const OVERLAYS = "overlays";
 async function main(argv) {
   const options = parseOptions(argv);
   const overlaysDirectory = join(options.root, FIXTURES, OVERLAYS);
-  const names = (await readdir(overlaysDirectory, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
+  const names = await listOverlayNames(overlaysDirectory);
 
   for (const name of names) {
     const overlay = await readOverlay(options.root, name);
@@ -31,6 +28,22 @@ async function main(argv) {
   if (options.check) {
     process.stdout.write(`verified ${String(names.length)} composed fixtures\n`);
   }
+}
+
+async function listOverlayNames(overlaysDirectory) {
+  let entries;
+  try {
+    entries = await readdir(overlaysDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
 }
 
 function parseOptions(argv) {

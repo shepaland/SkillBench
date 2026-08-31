@@ -161,3 +161,9 @@ test("rejects a removal that names no file in the base", async () => {
   assert.equal(outcome.code, 1);
   assert.match(outcome.stderr, /src\/absent\.js/u);
 });
+
+test("passes in both modes when fixtures has no overlays directory", async () => {
+  const root = await createRoot();
+  assert.equal((await build(root)).code, 0);
+  assert.equal((await build(root, ["--check"])).code, 0);
+});
