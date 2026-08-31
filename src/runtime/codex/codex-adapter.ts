@@ -16,6 +16,12 @@ export const codexAdapterVersion = "1.0.0";
 
 const inheritedVariables = ["PATH", "HOME", "TMPDIR", "LANG"] as const;
 
+// A grandchild the runtime spawns (e.g. a sandboxed subprocess) can inherit stdout
+// and keep that pipe's write end open long after the direct child has exited, so
+// `close` may never fire. This bounds how long we wait for it to arrive once the
+// child itself is known to be gone.
+const exitDrainMs = 200;
+
 export interface CodexAdapterOptions {
   readonly runtimeVersion: string;
   readonly executable?: string;
@@ -172,12 +178,35 @@ export class CodexAdapter implements RuntimeAdapter {
       let threadId: string | null = null;
       let usage: { readonly inputTokens: number; readonly outputTokens: number } | null = null;
       let stopped: ExhaustionCause | null = null;
+      let settled = false;
+
+      // A process that exits before draining stdin (a rejected flag, an auth
+      // failure, a prompt larger than the pipe buffer) makes the write end emit
+      // EPIPE/ECONNRESET. Without a listener that surfaces as an uncaught
+      // exception; here it is silently absorbed and `close` reports the exit code.
+      child.stdin.on("error", () => {});
 
       const stop = (cause: ExhaustionCause): void => {
         if (stopped !== null) return;
         stopped = cause;
         child.kill("SIGTERM");
         setTimeout(() => child.kill("SIGKILL"), killGraceMs).unref();
+      };
+
+      // `exitCode`/`signal` are tied to whichever event fired; every other field is
+      // read fresh from the closure below, after the leftover-buffer flush, so a
+      // stream cut mid-line is reflected in `unparsedLines` no matter which event
+      // resolves the step.
+      const settle = (exitCode: number | null, exitSignal: NodeJS.Signals | null): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        // A stream cut mid-line still becomes evidence: it is counted, never dropped.
+        handleLine(buffer);
+        resolve(Object.freeze({
+          exitCode, signal: exitSignal, threadId, usage,
+          unparsedLines: unparsed, bytes, stopped,
+        }));
       };
 
       const handleLine = (line: string): void => {
@@ -216,13 +245,17 @@ export class CodexAdapter implements RuntimeAdapter {
       });
 
       child.once("close", (code: number | null, closeSignal: NodeJS.Signals | null) => {
-        clearTimeout(timer);
-        // A stream cut mid-line still becomes evidence: it is counted, never dropped.
-        handleLine(buffer);
-        resolve(Object.freeze({
-          exitCode: code, signal: closeSignal, threadId, usage,
-          unparsedLines: unparsed, bytes, stopped,
-        }));
+        settle(code, closeSignal);
+      });
+
+      // `close` waits for every stdio stream to close, but a grandchild that
+      // inherited stdout can hold its write end open indefinitely, so `close` is
+      // not safe to wait on alone. `exit` fires as soon as this process itself has
+      // terminated; give any already-buffered stdio a brief window to arrive, then
+      // resolve regardless of whether `close` ever does. In the ordinary case
+      // `close` fires first and this callback is a no-op via the `settled` guard.
+      child.once("exit", (code: number | null, exitSignal: NodeJS.Signals | null) => {
+        setTimeout(() => { settle(code, exitSignal); }, exitDrainMs).unref();
       });
 
       child.stdin.end(options.prompt, "utf8");
@@ -234,11 +267,15 @@ function buildEnvironment(
   homePath: string,
   declared: Readonly<Record<string, string>>,
 ): Record<string, string> {
-  // The parent environment is never inherited wholesale.
-  const environment: Record<string, string> = { CODEX_HOME: homePath };
+  // The parent environment is never inherited wholesale. Declared variables are
+  // applied first so they can never override the run's own isolation: a variant
+  // that declares CODEX_HOME or PATH must not be able to redirect the private
+  // runtime home or the resolved binary.
+  const environment: Record<string, string> = { ...declared };
   for (const key of inheritedVariables) {
     const value = process.env[key];
     if (value !== undefined) environment[key] = value;
   }
-  return { ...environment, ...declared };
+  environment["CODEX_HOME"] = homePath;
+  return environment;
 }
