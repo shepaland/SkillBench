@@ -59,3 +59,27 @@ test("handles multiple levels of nesting without infinite loops", () => {
     [{ executor: "node", args: ["--test"] }]
   );
 });
+
+test("does not treat ordinary commands with -c flag as shell wrappers", () => {
+  // Regression guard: gcc -c foo.c should not be treated as a shell wrapper
+  // even though it has 3 tokens with -c in the middle
+  assert.deepEqual(
+    normalizeCommand('/bin/zsh -lc "gcc -c foo.c && node --test"'),
+    [
+      { executor: "gcc", args: ["-c", "foo.c"] },
+      { executor: "node", args: ["--test"] },
+    ]
+  );
+});
+
+test("shells must be verified by basename to avoid false positives", () => {
+  // Verify that only known shell basenames (sh, bash, zsh, dash, ksh) trigger unwrapping.
+  // Other commands with -c flag (like cc, perl, etc.) should not be unwrapped.
+  assert.deepEqual(
+    normalizeCommand('/bin/zsh -lc "cc -c file.c && node --test"'),
+    [
+      { executor: "cc", args: ["-c", "file.c"] },
+      { executor: "node", args: ["--test"] },
+    ]
+  );
+});

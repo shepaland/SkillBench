@@ -4,6 +4,7 @@ export interface CommandRecord {
 }
 
 const shellFlags = new Set(["-lc", "-c", "-lic"]);
+const shellExecutables = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
 /**
  * Turns one reported command string into command records. The runtime reports a
@@ -51,6 +52,9 @@ function unwrapShell(tokens: readonly string[]): string | undefined {
   const [executable, flag, script] = tokens;
   if (executable === undefined || flag === undefined || script === undefined) return undefined;
   if (tokens.length !== 3 || !shellFlags.has(flag)) return undefined;
+  // Verify the executable is actually a shell by checking its basename
+  const basename = executable.split("/").pop() ?? "";
+  if (!shellExecutables.has(basename)) return undefined;
   return script;
 }
 
