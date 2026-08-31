@@ -110,7 +110,7 @@ The child Codex process does not inherit the parent shell's environment. It rece
 
 A case may declare `transcriptRules`: typed, deterministic checks over the events a run recorded. There are exactly five checks: `no_file_change`, `assistant_message`, `command_ran`, `command_before_file_change`, and `command_after_file_change`. Every rule may set `expect: false` to require that the check does *not* hold, instead of the default `expect: true`.
 
-A rule named in a prompt step's `continuation.eventRuleIds` is checked once, at that point in the run, over every event recorded so far — and that check happens before the next prompt is sent. A rule that no step's continuation names is checked once, after the session ends, over the whole transcript. When a continuation rule does not hold, SkillBench records the violation and still sends the next prompt; the run is not stopped early.
+A rule named in a prompt step's `continuation.eventRuleIds` is checked once, at that point in the run, over every event recorded so far — and that check happens before the next prompt is sent. A rule that no step's continuation names is checked once, after the session ends, over the whole transcript. If a continuation point is never reached — the run exhausts its budget, or a step exits with a non-zero code before that step's continuation fires — SkillBench checks that rule once instead when the session ends, over the whole transcript, rather than leaving it unchecked. Every rule is still checked exactly once; only the window it is checked over can widen this way. When a continuation rule does not hold, SkillBench records the violation and still sends the next prompt; the run is not stopped early.
 
 An assertion in a case can carry `transcriptRuleId` instead of being graded by the private oracle. SkillBench grades that assertion itself, from the named rule's outcome, and the private oracle manifest must not also cover it — `validate` rejects a case where the two disagree about which assertions the oracle covers.
 
@@ -131,7 +131,7 @@ Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/`:
 | File | Contents |
 | --- | --- |
 | `manifest.json` | The frozen run inputs: case, variant, model, sandbox mode, limits, and content hashes. |
-| `transcript.json` | The events, process result, and token usage reported by the runtime, plus the outcome of every declared transcript rule as one list. A rule named by a step's continuation was evaluated at that continuation point; the file does not group outcomes by step. |
+| `transcript.json` | The events, process result, and token usage reported by the runtime, plus the outcome of every declared transcript rule as one list. A rule named by a step's continuation was evaluated at that continuation point, unless the run ended before that point was reached, in which case it was evaluated once when the session closed instead; the file does not group outcomes by step. |
 | `changes.json` | The files the agent added, changed, or removed, and whether any change fell outside the allowed paths. |
 | `result.json` | The run status, the outcome of each assertion, and the run's costs. |
 | `raw/step-<step-id>.jsonl` | Every line the runtime printed for that step on its standard output, written before anything parses it. Only written by a runtime that produces a stream, such as Codex; the fake runtime writes no `raw/` directory. |
@@ -366,7 +366,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 
 Кейс может объявить `transcriptRules` — типизированные детерминированные проверки над событиями, записанными во время запуска. Есть ровно пять проверок: `no_file_change`, `assistant_message`, `command_ran`, `command_before_file_change` и `command_after_file_change`. Любое правило может задать `expect: false`, чтобы требовать, чтобы проверка НЕ выполнялась, вместо значения по умолчанию `expect: true`.
 
-Правило, названное в `continuation.eventRuleIds` шага запроса, проверяется один раз — в этой точке запуска, по всем событиям, записанным до этого момента, — и эта проверка происходит до отправки следующего запроса. Правило, которое не назвал ни один шаг, проверяется один раз — после завершения сессии, по всей записи диалога целиком. Если правило-условие продолжения не выполняется, SkillBench записывает нарушение и всё равно отправляет следующий запрос: запуск не останавливается досрочно.
+Правило, названное в `continuation.eventRuleIds` шага запроса, проверяется один раз — в этой точке запуска, по всем событиям, записанным до этого момента, — и эта проверка происходит до отправки следующего запроса. Правило, которое не назвал ни один шаг, проверяется один раз — после завершения сессии, по всей записи диалога целиком. Если точка продолжения так и не наступила — запуск исчерпал бюджет или шаг завершился с ненулевым кодом раньше, чем сработало его продолжение, — SkillBench вместо этого проверяет правило один раз при завершении сессии, по всей записи диалога целиком, вместо того чтобы оставить его непроверенным. Каждое правило всё равно проверяется ровно один раз; расшириться может только то, по какому окну оно проверяется. Если правило-условие продолжения не выполняется, SkillBench записывает нарушение и всё равно отправляет следующий запрос: запуск не останавливается досрочно.
 
 Утверждение в кейсе может нести поле `transcriptRuleId` вместо того, чтобы проверяться закрытым оракулом. SkillBench сам оценивает такое утверждение по результату названного правила, и манифест закрытого оракула не должен также покрывать это утверждение — `validate` отклоняет кейс, если эти два множества расходятся в том, какие утверждения покрывает оракул.
 
@@ -387,7 +387,7 @@ SKILLBENCH_LIVE=1 npm run smoke:codex
 | Файл | Содержимое |
 | --- | --- |
 | `manifest.json` | Зафиксированные входные данные запуска: кейс, вариант, модель, режим песочницы, лимиты и хеши содержимого. |
-| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения, а также результат каждого заявленного правила диалога одним списком. Правило, названное условием продолжения шага, оценивалось в этой точке продолжения; файл не группирует результаты по шагам. |
+| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения, а также результат каждого заявленного правила диалога одним списком. Правило, названное условием продолжения шага, оценивалось в этой точке продолжения — если только запуск не завершился раньше, чем эта точка была достигнута, тогда оно оценивалось один раз при закрытии сессии; файл не группирует результаты по шагам. |
 | `changes.json` | Файлы, которые агент добавил, изменил или удалил, и попало ли какое-либо изменение за пределы разрешённых путей. |
 | `result.json` | Статус запуска, результат каждой проверки-утверждения и затраты на запуск. |
 | `raw/step-<step-id>.jsonl` | Каждая строка, которую среда выполнения напечатала для этого шага в стандартный вывод, записанная до того, как её что-либо разобрало. Записывается только средой выполнения, которая выдаёт поток данных, например Codex; фиктивная среда выполнения каталог `raw/` не создаёт. |
