@@ -203,10 +203,18 @@ export class CodexAdapter implements RuntimeAdapter {
         clearTimeout(timer);
         // A stream cut mid-line still becomes evidence: it is counted, never dropped.
         handleLine(buffer);
-        resolve(Object.freeze({
+        const result = Object.freeze({
           exitCode, signal: exitSignal, threadId, usage,
           unparsedLines: unparsed, bytes, stopped,
-        }));
+        });
+        // A surviving grandchild that inherited these streams can keep writing
+        // after this step has settled. Destroy both here so nothing more reaches
+        // `handleLine`/`onRawLine`/`onEvent`: a settled step's bytes must stop
+        // counting against the budget, and its lines must never splice into a
+        // later step's region of the shared transcript.
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolve(result);
       };
 
       const handleLine = (line: string): void => {
@@ -255,6 +263,11 @@ export class CodexAdapter implements RuntimeAdapter {
       // resolve regardless of whether `close` ever does. In the ordinary case
       // `close` fires first and this callback is a no-op via the `settled` guard.
       child.once("exit", (code: number | null, exitSignal: NodeJS.Signals | null) => {
+        // Safe to `.unref()`: if any stdio handle is still open (the grandchild
+        // case this timer exists for), that handle alone keeps the event loop
+        // alive long enough for this timer to fire regardless of its ref state.
+        // If every stdio stream had already closed, `close` would have settled
+        // the step already and this callback would be a no-op via `settled`.
         setTimeout(() => { settle(code, exitSignal); }, exitDrainMs).unref();
       });
 

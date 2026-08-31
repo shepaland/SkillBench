@@ -20,6 +20,12 @@ export interface FakeCodexStep {
    * process exits, regardless of whether the adapter has already killed it.
    */
   readonly spawnGrandchildMs?: number;
+  /**
+   * Spawns a detached grandchild that inherits stdout and, after this process has
+   * already exited, waits `afterMs` and writes `line` before exiting itself. Used
+   * to prove a step's stdio is not still being listened to once it has settled.
+   */
+  readonly grandchildWrite?: { readonly afterMs: number; readonly line: string };
   /** Environment variable keys whose live value (as seen by the fake) is echoed back as a JSON line. */
   readonly probeEnvKeys?: readonly string[];
 }
@@ -37,6 +43,7 @@ export async function createFakeCodex(steps: readonly FakeCodexStep[]): Promise<
 }> {
   const directory = await mkdtemp(join(tmpdir(), "fake-codex-"));
   const executable = join(directory, "fake-codex.mjs");
+  const grandchildWritePath = join(directory, "grandchild-write.mjs");
   const script = `#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -44,6 +51,7 @@ import { spawn } from "node:child_process";
 const steps = ${JSON.stringify(steps)};
 const counterPath = ${JSON.stringify(join(directory, "invocations"))};
 const argvPath = ${JSON.stringify(join(directory, "argv.log"))};
+const grandchildWritePath = ${JSON.stringify(grandchildWritePath)};
 const index = existsSync(counterPath) ? Number(readFileSync(counterPath, "utf8")) : 0;
 writeFileSync(counterPath, String(index + 1));
 writeFileSync(argvPath, JSON.stringify(process.argv.slice(2)) + "\\n", { flag: "a" });
@@ -66,6 +74,18 @@ process.stdin.on("end", () => {
     );
     grandchild.unref();
   }
+  if (step.grandchildWrite) {
+    const grandchild = spawn(process.execPath, [grandchildWritePath], {
+      stdio: ["ignore", "inherit", "ignore"],
+      detached: true,
+      env: {
+        ...process.env,
+        FAKE_CODEX_GRANDCHILD_AFTER_MS: String(step.grandchildWrite.afterMs),
+        FAKE_CODEX_GRANDCHILD_LINE: step.grandchildWrite.line,
+      },
+    });
+    grandchild.unref();
+  }
   const linger = step.lingerMs ?? 0;
   if (linger > 0) {
     setTimeout(() => process.exit(step.exitCode ?? 0), linger);
@@ -74,7 +94,18 @@ process.stdin.on("end", () => {
   }
 });
 `;
+  // A separate script, not an inline `-e` string, so the written line never has to
+  // survive being embedded as a quoted string inside another quoted string.
+  const grandchildWriteScript = `#!/usr/bin/env node
+const afterMs = Number(process.env.FAKE_CODEX_GRANDCHILD_AFTER_MS ?? "0");
+const line = process.env.FAKE_CODEX_GRANDCHILD_LINE ?? "";
+setTimeout(() => {
+  process.stdout.write(line + "\\n");
+  process.exit(0);
+}, afterMs);
+`;
   await writeFile(executable, script, "utf8");
+  await writeFile(grandchildWritePath, grandchildWriteScript, "utf8");
   await chmod(executable, 0o755);
   return { executable, directory };
 }

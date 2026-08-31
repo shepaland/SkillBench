@@ -230,3 +230,26 @@ test("does not let a declared variable override the run's own isolation", async 
   assert.ok(codexHome !== null && codexHome !== undefined && codexHome.length > 0);
   assert.notEqual(path, "/should-not-win");
 });
+
+test("stops listening to a step's stdio once that step has settled", async () => {
+  const raw: string[] = [];
+  const lateLine = messageLine("late-from-grandchild");
+  const { execution } = await run(
+    [
+      // Step 1 exits almost immediately, but its detached grandchild inherits
+      // stdout and writes `lateLine` well after step 1 has already settled.
+      { lines: [threadLine("t-1")], grandchildWrite: { afterMs: 300, line: lateLine } },
+      // Step 2 deliberately lingers, so it is still in progress at the 300ms
+      // mark — if step 1's stdio were still being listened to, the late write
+      // would land here, splicing a dead step's event into step 2's region.
+      { lines: [threadLine("t-1"), usageLine(1, 1)], lingerMs: 1200 },
+    ],
+    {},
+    steps,
+    { onRawLine: (_stepId, line) => raw.push(line) },
+  );
+
+  assert.ok(!raw.includes(lateLine));
+  assert.ok(!execution.events.some((event) =>
+    event.type === "assistant_message" && event.text === "late-from-grandchild"));
+});
