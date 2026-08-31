@@ -46,6 +46,26 @@ test("reports a fixture that cannot be resolved", async () => {
   assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["FIXTURE_UNAVAILABLE"]);
 });
 
+test("reports a fixture path that does not name a directory inside fixtures/", async () => {
+  // Each of these resolves to a real directory that is not a fixture. Reporting them
+  // before resolution matters: hashing "." would walk the whole project root, private
+  // oracles included, only to end in a hash mismatch.
+  for (const path of [".", "fixtures", "fixtures/."]) {
+    const project = await createTempProject();
+    await writeJson(project.caseManifestPath, {
+      ...project.caseManifest,
+      fixture: { ...project.caseManifest.fixture, path },
+    });
+
+    const catalog = await loadCatalog(project.root);
+
+    assert.deepEqual(issueCodes(catalog.issues), ["FIXTURE_UNAVAILABLE"], `for fixture path ${path}`);
+    assert.match(catalog.issues[0]?.message ?? "", /must name a directory inside fixtures\//u);
+    assert.equal(catalog.cases[0]?.fixturePath, undefined);
+    assert.equal(catalog.cases[0]?.fixtureHash, undefined);
+  }
+});
+
 test("reports a fixture whose tree no longer matches its declared hash", async () => {
   const project = await createTempProject();
   await writeFile(join(project.fixtureDirectory, "unexpected.js"), "export const changed = true;\n");

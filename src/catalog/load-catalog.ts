@@ -238,24 +238,29 @@ async function validateCase(
 
   let fixturePath: string | undefined;
   let fixtureHash: ContentHash | undefined;
-  try {
-    fixturePath = await paths.resolveExisting(manifest.fixture.path, "directory");
-    fixtureHash = await hashTree(fixturePath);
-    if (fixtureHash !== manifest.fixture.contentHash) {
+  const misplacedFixture = fixtureLocationIssue(manifest.fixture.path);
+  if (misplacedFixture !== undefined) {
+    addIssue(issues, source, "FIXTURE_UNAVAILABLE", misplacedFixture);
+  } else {
+    try {
+      fixturePath = await paths.resolveExisting(manifest.fixture.path, "directory");
+      fixtureHash = await hashTree(fixturePath);
+      if (fixtureHash !== manifest.fixture.contentHash) {
+        addIssue(
+          issues,
+          source,
+          "FIXTURE_HASH_MISMATCH",
+          `fixture ${JSON.stringify(manifest.fixture.path)} has hash ${fixtureHash}; expected ${manifest.fixture.contentHash}`,
+        );
+      }
+    } catch (error: unknown) {
       addIssue(
         issues,
         source,
-        "FIXTURE_HASH_MISMATCH",
-        `fixture ${JSON.stringify(manifest.fixture.path)} has hash ${fixtureHash}; expected ${manifest.fixture.contentHash}`,
+        "FIXTURE_UNAVAILABLE",
+        `fixture ${JSON.stringify(manifest.fixture.path)} is unavailable: ${errorMessage(error)}`,
       );
     }
-  } catch (error: unknown) {
-    addIssue(
-      issues,
-      source,
-      "FIXTURE_UNAVAILABLE",
-      `fixture ${JSON.stringify(manifest.fixture.path)} is unavailable: ${errorMessage(error)}`,
-    );
   }
 
   let oraclePath: string | undefined;
@@ -310,6 +315,24 @@ async function validateCase(
   }
 
   return compactCase({ source, manifest, fixturePath, fixtureHash, oraclePath, oracleHash });
+}
+
+/**
+ * A fixture must name a directory inside `fixtures/` before anything resolves or hashes
+ * it. Path parsing drops "." segments, so `"."` and `"fixtures/."` resolve to a real
+ * directory that is no fixture — and hashing the project root walks `.private/` and
+ * `node_modules/` before the hash mismatch is reported. `materializeWorkspace` refuses
+ * such a path independently; this keeps `validate` from walking it in the first place.
+ */
+function fixtureLocationIssue(path: string): string | undefined {
+  const segments = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length < 2 || segments[0] !== "fixtures") {
+    return `fixture ${JSON.stringify(path)} must name a directory inside fixtures/`;
+  }
+  return undefined;
 }
 
 function validateUniqueIds(
