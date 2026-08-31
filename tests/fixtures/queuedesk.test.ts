@@ -52,11 +52,13 @@ for (const fixture of ["queuedesk-tenant-leak", "queuedesk-unsafe-write", "queue
   test(`the ${fixture} defect stays invisible to the public suite`, async () => {
     const outcome = await runFixtureSuite(fixture);
     assert.equal(outcome.failed, 0, outcome.output);
+    assert.ok(outcome.passed >= 40, `expected a dense suite, saw ${String(outcome.passed)} passing tests`);
   });
 }
 
 test("the queuedesk-claim-order defect shows exactly one failing test", async () => {
   const outcome = await runFixtureSuite("queuedesk-claim-order");
   assert.equal(outcome.failed, 1, outcome.output);
+  assert.ok(outcome.passed >= 40, `expected a dense suite, saw ${String(outcome.passed)} passing tests`);
   assert.match(outcome.output, /not ok \d+ - claim takes the highest priority queued job first/u);
 });
