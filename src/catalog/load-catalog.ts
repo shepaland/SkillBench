@@ -24,6 +24,8 @@ export type CatalogIssueCode =
   | "ORACLE_MANIFEST_INVALID"
   | "ORACLE_UNAVAILABLE"
   | "SCHEMA_VALIDATION"
+  | "TRANSCRIPT_RULE_NOT_FOUND"
+  | "TRANSCRIPT_RULE_REUSED"
   | "VARIANT_HASH_MISMATCH"
   | "VARIANT_SOURCE_UNAVAILABLE";
 
@@ -334,6 +336,7 @@ function validateTranscriptReferences(
   issues: CatalogIssue[],
 ): void {
   const transcriptRuleIds = new Set((manifest.transcriptRules ?? []).map(({ id }) => id));
+  const referencedBy = new Map<string, string>();
 
   for (const step of manifest.promptSteps) {
     for (const ruleId of step.continuation?.eventRuleIds ?? []) {
@@ -344,9 +347,47 @@ function validateTranscriptReferences(
           "CONTINUATION_RULE_NOT_FOUND",
           `prompt step ${JSON.stringify(step.id)} references missing transcript rule ${JSON.stringify(ruleId)}`,
         );
+        continue;
       }
+      claimRule(ruleId, `prompt step ${JSON.stringify(step.id)}`, referencedBy, source, issues);
     }
   }
+
+  const gradedBy = new Map<string, string>();
+  for (const assertion of manifest.assertions) {
+    const ruleId = assertion.transcriptRuleId;
+    if (ruleId === undefined) continue;
+    if (!transcriptRuleIds.has(ruleId)) {
+      addIssue(
+        issues,
+        source,
+        "TRANSCRIPT_RULE_NOT_FOUND",
+        `assertion ${JSON.stringify(assertion.id)} references missing transcript rule ${JSON.stringify(ruleId)}`,
+      );
+      continue;
+    }
+    claimRule(ruleId, `assertion ${JSON.stringify(assertion.id)}`, gradedBy, source, issues);
+  }
+}
+
+function claimRule(
+  ruleId: string,
+  claimant: string,
+  claims: Map<string, string>,
+  source: string,
+  issues: CatalogIssue[],
+): void {
+  const existing = claims.get(ruleId);
+  if (existing === undefined) {
+    claims.set(ruleId, claimant);
+    return;
+  }
+  addIssue(
+    issues,
+    source,
+    "TRANSCRIPT_RULE_REUSED",
+    `transcript rule ${JSON.stringify(ruleId)} is claimed by ${existing} and ${claimant}`,
+  );
 }
 
 function validateChangePathIntersections(

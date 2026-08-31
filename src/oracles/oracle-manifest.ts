@@ -39,13 +39,26 @@ export function assertOracleCoversAssertions(
     checkIds.add(check.assertionId);
   }
 
-  const declaredIds = new Set(assertions.map(({ id }) => id));
-  const missing = [...declaredIds].filter((id) => !checkIds.has(id)).sort();
-  const extra = [...checkIds].filter((id) => !declaredIds.has(id)).sort();
+  const transcriptGraded = new Set(
+    assertions.filter(({ transcriptRuleId }) => transcriptRuleId !== undefined).map(({ id }) => id),
+  );
+  const oracleGraded = new Set(
+    assertions.filter(({ transcriptRuleId }) => transcriptRuleId === undefined).map(({ id }) => id),
+  );
 
+  const overlapping = [...checkIds].filter((id) => transcriptGraded.has(id)).sort();
+  if (overlapping.length > 0) {
+    throw new ValidationError(
+      `oracle declares check(s) for assertion(s) graded from the transcript: ${overlapping.join(", ")}`,
+    );
+  }
+
+  const extra = [...checkIds].filter((id) => !oracleGraded.has(id)).sort();
   if (extra.length > 0) {
     throw new ValidationError(`oracle declares check(s) for undeclared assertion(s): ${extra.join(", ")}`);
   }
+
+  const missing = [...oracleGraded].filter((id) => !checkIds.has(id)).sort();
   if (missing.length > 0) {
     throw new ValidationError(`oracle has no check for declared assertion(s): ${missing.join(", ")}`);
   }
