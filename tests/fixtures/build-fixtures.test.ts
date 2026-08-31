@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -147,6 +147,29 @@ test("rejects a symbolic link in an overlay", async () => {
   const outcome = await build(root);
   assert.equal(outcome.code, 1);
   assert.match(outcome.stderr, /symbolic link/u);
+});
+
+test("rejects a removal that escapes the composed fixture and touches nothing outside the root", async () => {
+  const root = await createRoot();
+  const victim = await mkdtemp(join(tmpdir(), "skillbench-victim-"));
+  const marker = join(victim, "safe.txt");
+  await writeFile(marker, "keep\n");
+  await createOverlay(
+    root,
+    "escape",
+    {
+      baseFixture: "base",
+      target: "base-escape",
+      description: "Removes outside the fixture.",
+      removals: [`../../${basename(victim)}`],
+    },
+    { "src/index.js": "export const value = 2;\n" },
+  );
+
+  const outcome = await build(root);
+  assert.equal(outcome.code, 1);
+  assert.match(outcome.stderr, /removal/u);
+  assert.equal(await readFile(marker, "utf8"), "keep\n");
 });
 
 test("rejects a removal that names no file in the base", async () => {

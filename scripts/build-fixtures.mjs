@@ -93,6 +93,13 @@ function assertInsideFixtures(root, candidate, label) {
   }
 }
 
+function assertInsideDirectory(root, candidate, label) {
+  const resolved = resolve(root, candidate);
+  if (!resolved.startsWith(root + sep)) {
+    throw new Error(`${label} must stay inside its fixture: ${candidate}`);
+  }
+}
+
 async function compose(root, overlay) {
   const base = join(root, FIXTURES, overlay.baseFixture);
   if (!(await isDirectory(base))) {
@@ -111,6 +118,9 @@ async function compose(root, overlay) {
   await mkdir(composed, { recursive: true });
   await cp(base, composed, { recursive: true, dereference: false, verbatimSymlinks: true });
 
+  for (const removal of overlay.removals) {
+    assertInsideDirectory(composed, removal, `overlay ${overlay.name} removal`);
+  }
   for (const removal of overlay.removals) {
     const target = join(composed, removal);
     if (!(await exists(target))) {
