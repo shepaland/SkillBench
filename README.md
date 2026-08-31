@@ -8,9 +8,9 @@
 
 SkillBench is a command-line tool for checking coding-agent benchmark data. A coding agent is a program that reads a programming task and changes project files. A benchmark gives the same task to several agent setups and records which setup solves it. An agent setup is called a variant. A skill is a set of instructions that changes how the agent works. A variant can use a skill such as Superpowers or run without an extra skill as a control.
 
-The current version has four working commands. `validate` checks a benchmark catalog for broken links, unsafe paths, changed source files, and malformed JSON before any agent starts working. `list` prints the cases and variants found in a project. `dry-run` freezes every input needed for a run — such as the case, the variant, the model, and the sandbox mode — and prints the resulting plan without copying a workspace or starting an agent. `run` executes one or more independent runs from start to finish against a deterministic built-in fake runtime.
+The current version has four working commands. `validate` checks a benchmark catalog for broken links, unsafe paths, changed source files, and malformed JSON before any agent starts working. `list` prints the cases and variants found in a project. `dry-run` freezes every input needed for a run — such as the case, the variant, the model, and the sandbox mode — and prints the resulting plan without copying a workspace or starting an agent. `run` executes one or more independent runs from start to finish, either against a deterministic built-in fake runtime or against a live Codex session.
 
-No live coding agent is connected yet. Comparing variants, calculating metrics, and generating reports are not implemented. The `compare` and `report` commands are reserved for that future work and currently return exit code `2`.
+Comparing variants, calculating metrics, and generating reports are not implemented. The `compare` and `report` commands are reserved for that future work and currently return exit code `2`.
 
 ### Long-term goal and metrics
 
@@ -76,11 +76,17 @@ node dist/src/cli.js list --project .
 node dist/src/cli.js dry-run --project . --case <case-id> --variant <variant-id>
 ```
 
-`run` executes one or more independent runs from start to finish: it copies the fixture into an isolated workspace, installs the variant, runs the coding agent through the deterministic fake runtime, checks the result against the private oracle, and writes the evidence to disk. `--runs` sets how many independent repetitions to execute.
+`run` executes one or more independent runs from start to finish: it copies the fixture into an isolated workspace, installs the variant, runs the coding agent, checks the result against the private oracle, and writes the evidence to disk. `--runs` sets how many independent repetitions to execute. `--runtime` picks the coding agent: `fake`, the deterministic built-in runtime, or `codex`, a live Codex session. `fake` is the default.
 
 ```sh
 node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runs 2
 ```
+
+```sh
+node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runtime codex
+```
+
+`dry-run` also accepts `--runtime codex`, because the frozen plan records the runtime's version, which requires asking the runtime for it.
 
 `--keep-workspace` keeps the temporary workspace after the run instead of removing it and prints its path, so the finished state can be inspected. The private oracle material is removed in every case, whether or not the flag is used.
 
@@ -88,16 +94,47 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --r
 node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --keep-workspace
 ```
 
+### The Codex runtime
+
+`--runtime codex` runs the case against a real Codex session instead of the fake runtime. Using it requires:
+
+- Codex installed and on the command-line search path;
+- Codex already logged in, so a credential file exists in its runtime home;
+- the case's sandbox mode to be one of the names Codex accepts (`read-only`, `workspace-write`, or `danger-full-access`).
+
+Each run gets its own private, temporary runtime home directory, built fresh for that run. Only the credential file is copied into it; the operator's personal Codex configuration — its settings, its saved sessions, its installed skill packages — is never copied and never read. This keeps two things true: a benchmark run cannot see or resume another run's session, and personal configuration on the machine running the benchmark cannot skew a measured result. The temporary home is deleted once the run finishes.
+
+The child Codex process does not inherit the parent shell's environment. It receives only a small, explicit set of variables plus whatever the variant manifest declares safe.
+
+### Transcript rules
+
+A case may declare `transcriptRules`: typed, deterministic checks over the events a run recorded. There are exactly five checks: `no_file_change`, `assistant_message`, `command_ran`, `command_before_file_change`, and `command_after_file_change`. Every rule may set `expect: false` to require that the check does *not* hold, instead of the default `expect: true`.
+
+A rule named in a prompt step's `continuation.eventRuleIds` is checked once, at that point in the run, over every event recorded so far — and that check happens before the next prompt is sent. A rule that no step's continuation names is checked once, after the session ends, over the whole transcript. When a continuation rule does not hold, SkillBench records the violation and still sends the next prompt; the run is not stopped early.
+
+An assertion in a case can carry `transcriptRuleId` instead of being graded by the private oracle. SkillBench grades that assertion itself, from the named rule's outcome, and the private oracle manifest must not also cover it — `validate` rejects a case where the two disagree about which assertions the oracle covers.
+
+### Live smoke check
+
+`npm run smoke:codex` runs one tiny, real Codex session end to end, to confirm the adapter still works against the currently installed Codex version. It is opt-in: it only runs when the environment variable `SKILLBENCH_LIVE=1` is set, it spends the operator's real Codex credits, and it is never run by `npm run check` or by continuous integration.
+
+```sh
+SKILLBENCH_LIVE=1 npm run smoke:codex
+```
+
+This check proves that one small task runs correctly against the real adapter. It does not exercise the public benchmark suite, because there are no public cases yet.
+
 ### Run evidence
 
-Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/` as four files:
+Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/`:
 
 | File | Contents |
 | --- | --- |
 | `manifest.json` | The frozen run inputs: case, variant, model, sandbox mode, limits, and content hashes. |
-| `transcript.json` | The events, process result, and token usage reported by the runtime. |
+| `transcript.json` | The events, process result, and token usage reported by the runtime, plus the rule outcomes evaluated at each step. |
 | `changes.json` | The files the agent added, changed, or removed, and whether any change fell outside the allowed paths. |
 | `result.json` | The run status, the outcome of each assertion, and the run's costs. |
+| `raw/step-<step-id>.jsonl` | Every line the runtime printed for that step, written before anything parses it. Only written by a runtime that produces a stream, such as Codex; the fake runtime writes no `raw/` directory. |
 
 ### Run statuses
 
@@ -109,7 +146,7 @@ Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/` as fo
 
 ### Private oracle manifest
 
-Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the assertions declared in the case — no assertion left without a check, no check for an assertion the case does not declare, and no two checks naming the same assertion.
+Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the case's declared assertions that do *not* carry a `transcriptRuleId` — those are graded by SkillBench itself, from a transcript rule, and must not also appear in the oracle. No covered assertion is left without a check, no check names an assertion the case does not declare, and no two checks name the same assertion.
 
 ### Requirements
 
@@ -207,15 +244,18 @@ Comparisons and Markdown reports are not implemented yet. Those artifacts belong
 ### Current limitations
 
 - `compare` and `report` are reserved commands and return exit code `2`.
-- `run` executes against the deterministic built-in fake runtime only. No live coding agent, such as Codex, is connected yet.
 - Runs execute one after another, not in parallel.
-- The fake runtime plays back a scripted transcript and does not change any files in the workspace, so an end-to-end run exercises the pipeline rather than real agent behavior.
-- `validate` checks that each required private oracle directory exists, is not empty, can be hashed, and — unless `--public-only` is used — that its oracle manifest covers exactly the case's declared assertions.
+- The fake runtime plays back a scripted transcript and does not change any files in the workspace, so an end-to-end run against it exercises the pipeline rather than real agent behavior.
+- A file edited through a shell command, rather than through the runtime's own edit tool, produces no transcript event that a rule can see. The end-of-run file comparison still detects the change, so scope checks are unaffected, but a transcript rule that watches for a file change will not see this kind of edit.
+- Reported shell commands are split into tokens and matched literally; this is not a shell. Quoting is handled only as matched quotes stripped from a token. Subshells, redirections, and expansions are not interpreted.
+- Stream parsing is pinned to the event shapes of one observed Codex version. A different installed version may produce lines SkillBench does not recognize; the run still completes and the raw stream is kept as evidence, but transcript rules may see fewer events. The runtime version is frozen into every run's manifest, so runs from different versions are never compared against each other.
+- Wall-clock and output-byte limits are enforced by sending the runtime a termination signal, then a kill signal after a short grace period; a child that ignores the first signal is stopped only by the second.
+- `validate` checks that each required private oracle directory exists, is not empty, can be hashed, and — unless `--public-only` is used — that its oracle manifest covers exactly the assertions the case declares without a `transcriptRuleId`.
 - Case and variant manifests are discovered only one directory below `cases/` and `variants/`.
 - `--public-only` skips private oracle availability checks. All schema, reference, hash, and path checks still run.
 - Catalog paths reject traversal and symbolic links. Another local process can still replace a checked path between validation and later use.
 - Immutable JSON storage protects writes that happen one after another. Two local processes writing the same record at the same time can conflict because the standard `rename` operation on macOS and Linux can replace an existing file.
-- The repository currently provides catalog validation, run orchestration against the fake runtime, and test fixtures. The twelve-case public benchmark suite, a real Codex adapter, scoring, comparisons, and reports are planned for later stages.
+- The repository currently provides catalog validation, run orchestration against the fake runtime and against a live Codex session, and test fixtures. The twelve-case public benchmark suite, scoring, comparisons, and reports are planned for later stages.
 
 ## Русский
 
@@ -223,9 +263,9 @@ Comparisons and Markdown reports are not implemented yet. Those artifacts belong
 
 SkillBench проверяет данные для тестирования кодовых агентов через командную строку. Кодовый агент читает задачу по программированию и меняет файлы проекта. Бенчмарк даёт одну задачу нескольким конфигурациям агента и записывает, какая конфигурация справилась. Такая конфигурация называется вариантом. Скилл содержит инструкции, которые меняют работу агента. Вариант может использовать скилл, например Superpowers, или работать без дополнительного скилла как контрольная группа.
 
-Текущая версия имеет четыре рабочие команды. `validate` проверяет каталог бенчмарка: ищет сломанные ссылки, опасные пути, изменившиеся исходные файлы и ошибки в JSON до запуска агента. `list` выводит список кейсов и вариантов, найденных в проекте. `dry-run` фиксирует все входные данные для запуска — например, кейс, вариант, модель и режим песочницы — и печатает получившийся план без копирования рабочего каталога и без запуска агента. `run` выполняет один или несколько независимых запусков от начала до конца на детерминированной встроенной фиктивной среде выполнения.
+Текущая версия имеет четыре рабочие команды. `validate` проверяет каталог бенчмарка: ищет сломанные ссылки, опасные пути, изменившиеся исходные файлы и ошибки в JSON до запуска агента. `list` выводит список кейсов и вариантов, найденных в проекте. `dry-run` фиксирует все входные данные для запуска — например, кейс, вариант, модель и режим песочницы — и печатает получившийся план без копирования рабочего каталога и без запуска агента. `run` выполняет один или несколько независимых запусков от начала до конца либо на детерминированной встроенной фиктивной среде выполнения, либо в настоящей сессии Codex.
 
-Настоящий кодовый агент пока не подключён. Сравнение вариантов, расчёт метрик и создание отчётов ещё не реализованы. Команды `compare` и `report` зарезервированы под эту будущую работу и сейчас возвращают код завершения `2`.
+Сравнение вариантов, расчёт метрик и создание отчётов ещё не реализованы. Команды `compare` и `report` зарезервированы под эту будущую работу и сейчас возвращают код завершения `2`.
 
 ### Конечная цель и метрики
 
@@ -291,11 +331,17 @@ node dist/src/cli.js list --project .
 node dist/src/cli.js dry-run --project . --case <case-id> --variant <variant-id>
 ```
 
-`run` выполняет один или несколько независимых запусков от начала до конца: копирует фикстуру в изолированный рабочий каталог, устанавливает вариант, запускает кодового агента через детерминированную фиктивную среду выполнения, проверяет результат по закрытому оракулу и записывает свидетельства запуска на диск. Флаг `--runs` задаёт число независимых повторов.
+`run` выполняет один или несколько независимых запусков от начала до конца: копирует фикстуру в изолированный рабочий каталог, устанавливает вариант, запускает кодового агента, проверяет результат по закрытому оракулу и записывает свидетельства запуска на диск. Флаг `--runs` задаёт число независимых повторов. Флаг `--runtime` выбирает кодового агента: `fake` — детерминированная встроенная среда выполнения, или `codex` — настоящая сессия Codex. По умолчанию используется `fake`.
 
 ```sh
 node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runs 2
 ```
+
+```sh
+node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --runtime codex
+```
+
+`dry-run` тоже принимает `--runtime codex`, потому что зафиксированный план записывает версию среды выполнения, а для этого нужно спросить эту версию у самой среды.
 
 Флаг `--keep-workspace` сохраняет временный рабочий каталог после запуска, вместо того чтобы удалить его, и печатает путь к нему — так можно разобрать итоговое состояние. Материалы закрытого оракула удаляются в любом случае, указан этот флаг или нет.
 
@@ -303,16 +349,47 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --r
 node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --keep-workspace
 ```
 
+### Среда выполнения Codex
+
+Флаг `--runtime codex` запускает кейс в настоящей сессии Codex вместо фиктивной среды выполнения. Для этого нужны:
+
+- установленный Codex, доступный в пути поиска команд;
+- уже выполненный вход в Codex, чтобы в его домашнем каталоге среды выполнения существовал файл учётных данных;
+- режим песочницы кейса, совпадающий с одним из имён, которые принимает Codex (`read-only`, `workspace-write` или `danger-full-access`).
+
+Каждый запуск получает свой собственный закрытый временный домашний каталог среды выполнения, созданный заново для этого запуска. В него копируется только файл учётных данных; личные настройки Codex — параметры, сохранённые сессии, установленные пакеты скиллов — никогда не копируются и не читаются. Это сохраняет два свойства: один запуск не может увидеть или продолжить сессию другого запуска, а личные настройки на машине, где идёт бенчмарк, не могут повлиять на результат измерения. Временный домашний каталог удаляется сразу после завершения запуска.
+
+Дочерний процесс Codex не наследует окружение родительской оболочки целиком. Он получает только небольшой явный набор переменных плюс те переменные, которые манифест варианта объявил безопасными.
+
+### Правила диалога
+
+Кейс может объявить `transcriptRules` — типизированные детерминированные проверки над событиями, записанными во время запуска. Есть ровно пять проверок: `no_file_change`, `assistant_message`, `command_ran`, `command_before_file_change` и `command_after_file_change`. Любое правило может задать `expect: false`, чтобы требовать, чтобы проверка НЕ выполнялась, вместо значения по умолчанию `expect: true`.
+
+Правило, названное в `continuation.eventRuleIds` шага запроса, проверяется один раз — в этой точке запуска, по всем событиям, записанным до этого момента, — и эта проверка происходит до отправки следующего запроса. Правило, которое не назвал ни один шаг, проверяется один раз — после завершения сессии, по всей записи диалога целиком. Если правило-условие продолжения не выполняется, SkillBench записывает нарушение и всё равно отправляет следующий запрос: запуск не останавливается досрочно.
+
+Утверждение в кейсе может нести поле `transcriptRuleId` вместо того, чтобы проверяться закрытым оракулом. SkillBench сам оценивает такое утверждение по результату названного правила, и манифест закрытого оракула не должен также покрывать это утверждение — `validate` отклоняет кейс, если эти два множества расходятся в том, какие утверждения покрывает оракул.
+
+### Проверка вживую
+
+Команда `npm run smoke:codex` целиком запускает одну маленькую настоящую сессию Codex, чтобы убедиться, что адаптер по-прежнему работает с установленной версией Codex. Она добровольная: запускается только когда установлена переменная окружения `SKILLBENCH_LIVE=1`, тратит настоящие кредиты Codex оператора и никогда не запускается ни командой `npm run check`, ни непрерывной интеграцией.
+
+```sh
+SKILLBENCH_LIVE=1 npm run smoke:codex
+```
+
+Эта проверка доказывает, что одна маленькая задача корректно выполняется на настоящем адаптере. Она не проверяет публичный набор кейсов бенчмарка, потому что публичных кейсов пока нет.
+
 ### Свидетельства запуска
 
-Каждый запуск записывает свои свидетельства в каталог `runs/<case-id>/<variant-id>/<run-id>/` в виде четырёх файлов:
+Каждый запуск записывает свои свидетельства в каталог `runs/<case-id>/<variant-id>/<run-id>/`:
 
 | Файл | Содержимое |
 | --- | --- |
 | `manifest.json` | Зафиксированные входные данные запуска: кейс, вариант, модель, режим песочницы, лимиты и хеши содержимого. |
-| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения. |
+| `transcript.json` | События, результат процесса и расход токенов, о которых сообщила среда выполнения, а также результаты правил, проверенных на каждом шаге. |
 | `changes.json` | Файлы, которые агент добавил, изменил или удалил, и попало ли какое-либо изменение за пределы разрешённых путей. |
 | `result.json` | Статус запуска, результат каждой проверки-утверждения и затраты на запуск. |
+| `raw/step-<step-id>.jsonl` | Каждая строка, которую среда выполнения напечатала для этого шага, записанная до того, как её что-либо разобрало. Записывается только средой выполнения, которая выдаёт поток данных, например Codex; фиктивная среда выполнения каталог `raw/` не создаёт. |
 
 ### Статусы запуска
 
@@ -324,7 +401,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 
 ### Манифест закрытого оракула
 
-Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те утверждения, что заявлены в кейсе, — без утверждений без проверки, без проверок для незаявленных утверждений и без двух проверок на одно и то же утверждение.
+Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те заявленные в кейсе утверждения, у которых НЕТ поля `transcriptRuleId`, — такие утверждения оценивает сам SkillBench по правилу диалога, и они не должны также присутствовать в оракуле. Ни одно покрываемое утверждение не остаётся без проверки, ни одна проверка не называет незаявленное утверждение, и никакие две проверки не называют одно и то же утверждение.
 
 ### Требования
 
@@ -422,12 +499,15 @@ Validated 0 cases and 0 variants.
 ### Текущие ограничения
 
 - `compare` и `report` — зарезервированные команды, они возвращают код `2`.
-- `run` выполняется только на детерминированной встроенной фиктивной среде выполнения. Настоящий кодовый агент, например Codex, пока не подключён.
 - Запуски выполняются один за другим, а не параллельно.
-- Фиктивная среда выполнения проигрывает заранее написанный сценарий и не меняет файлы в рабочем каталоге, поэтому сквозной запуск проверяет конвейер обработки, а не поведение настоящего агента.
-- `validate` проверяет, что нужный каталог закрытого оракула существует, содержит файлы и для него можно рассчитать хеш, а если не указан флаг `--public-only` — что его манифест покрывает ровно заявленные в кейсе утверждения.
+- Фиктивная среда выполнения проигрывает заранее написанный сценарий и не меняет файлы в рабочем каталоге, поэтому сквозной запуск на ней проверяет конвейер обработки, а не поведение настоящего агента.
+- Файл, изменённый через команду оболочки, а не через собственный инструмент редактирования среды выполнения, не порождает событие диалога, которое видит правило. Итоговое сравнение файлов всё равно найдёт это изменение, так что проверки границ задачи не пострадают, но правило диалога, следящее за изменением файла, такое редактирование не увидит.
+- Команды оболочки, о которых сообщает среда выполнения, разбиваются на токены и сравниваются буквально — это не оболочка. Кавычки обрабатываются только как парные кавычки, снятые с токена. Подоболочки, перенаправления и подстановки не разбираются.
+- Разбор потока данных настроен под форму событий одной наблюдаемой версии Codex. Другая установленная версия может выдать строки, которые SkillBench не распознаёт; запуск всё равно завершится, а исходный поток сохранится как свидетельство, но правила диалога могут увидеть меньше событий. Версия среды выполнения фиксируется в манифесте каждого запуска, поэтому запуски на разных версиях никогда не сравниваются друг с другом.
+- Лимиты по времени и по объёму вывода принудительно останавливаются отправкой среде выполнения сигнала завершения, а затем, после короткой паузы, сигнала принудительного завершения; дочерний процесс, который игнорирует первый сигнал, останавливается только вторым.
+- `validate` проверяет, что нужный каталог закрытого оракула существует, содержит файлы и для него можно рассчитать хеш, а если не указан флаг `--public-only` — что его манифест покрывает ровно те утверждения кейса, у которых нет поля `transcriptRuleId`.
 - SkillBench ищет манифесты кейсов и вариантов только на один уровень ниже каталогов `cases/` и `variants/`.
 - Флаг `--public-only` отключает проверку наличия закрытых оракулов. Проверки схем, ссылок, хешей и путей продолжают работать.
 - Пути каталога защищены от перехода в родительские каталоги и символических ссылок. Другая локальная программа всё ещё может заменить уже проверенный путь до его дальнейшего использования.
 - Хранилище неизменяемых JSON-файлов защищает записи, которые идут по очереди. Две локальные программы могут одновременно записывать один файл, потому что стандартная операция `rename` в macOS и Linux заменяет существующий файл.
-- Репозиторий пока содержит проверку каталога, оркестрацию запусков на фиктивной среде выполнения и тестовые фикстуры. Набор из двенадцати публичных кейсов, настоящий адаптер Codex, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
+- Репозиторий пока содержит проверку каталога, оркестрацию запусков на фиктивной среде выполнения и на настоящей сессии Codex, а также тестовые фикстуры. Набор из двенадцати публичных кейсов, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
