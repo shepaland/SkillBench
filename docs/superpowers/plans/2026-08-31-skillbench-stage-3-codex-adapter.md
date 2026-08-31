@@ -245,8 +245,14 @@ EOF
 **Files:**
 - Create: `src/runs/transcript-rules.ts`
 - Modify: `src/domain/model.ts:40-44` (the inline `transcriptRules` shape)
+- Modify: `schemas/case.schema.json` (the `transcriptRule` definition)
 - Modify: `src/catalog/load-catalog.ts` (remove the obsolete `beforeStepId` validation)
 - Test: `tests/runs/transcript-rules.test.ts`
+- Test: `tests/schemas/validator.test.ts`
+
+The schema moves in the same task as the domain type on purpose: if the model said
+`check` while the schema still required `event`, every case fixture in the test suite
+would have to satisfy two contradictory shapes at once.
 
 **Interfaces:**
 - Consumes: `TranscriptEvent` from Task 1.
@@ -373,7 +379,73 @@ and in `CaseManifest`:
   readonly transcriptRules?: readonly TranscriptRule[];
 ```
 
-- [ ] **Step 4: Delete the obsolete `beforeStepId` validation**
+- [ ] **Step 4: Replace the rule definition in the case schema**
+
+In `schemas/case.schema.json`, replace the `transcriptRule` definition under `$defs`
+with a discriminated pair. The `assertion` definition is left alone here; Task 3 extends
+it.
+
+```json
+    "commandMatcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check", "executor", "argsPrefix"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "check": { "enum": ["command_ran", "command_before_file_change", "command_after_file_change"] },
+        "executor": { "type": "string", "minLength": 1 },
+        "argsPrefix": { "type": "array", "items": { "type": "string" } },
+        "expect": { "type": "boolean" }
+      }
+    },
+    "eventPresence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "check": { "enum": ["no_file_change", "assistant_message"] },
+        "expect": { "type": "boolean" }
+      }
+    },
+    "transcriptRule": {
+      "oneOf": [
+        { "$ref": "#/$defs/eventPresence" },
+        { "$ref": "#/$defs/commandMatcher" }
+      ]
+    }
+```
+
+Append the two matching schema tests to `tests/schemas/validator.test.ts`:
+
+```ts
+test("rejects the removed free-form transcript rule shape", async () => {
+  const validator = await ManifestValidator.create(schemaDirectory);
+  assert.throws(
+    () => validator.validateCase({
+      ...baseCase,
+      transcriptRules: [{ id: "stopped", event: "assistant_message", beforeStepId: "s2" }],
+    }),
+    /case manifest/,
+  );
+});
+
+test("rejects a command rule without a matcher", async () => {
+  const validator = await ManifestValidator.create(schemaDirectory);
+  assert.throws(
+    () => validator.validateCase({
+      ...baseCase,
+      transcriptRules: [{ id: "tested", check: "command_ran" }],
+    }),
+    /case manifest/,
+  );
+});
+```
+
+If `tests/schemas/validator.test.ts` has no `baseCase` helper holding a minimal
+schema-valid case manifest, add one and reuse it.
+
+- [ ] **Step 5: Delete the obsolete `beforeStepId` validation**
 
 In `src/catalog/load-catalog.ts`, delete the second loop of `validateTranscriptReferences`
 (the `beforeStepId` block) and remove `"TRANSCRIPT_STEP_NOT_FOUND"` from
@@ -382,7 +454,7 @@ In `src/catalog/load-catalog.ts`, delete the second loop of `validateTranscriptR
 `beforeStepId` on a rule into the typed shape, for example
 `{ id: "stopped", check: "no_file_change" }`.
 
-- [ ] **Step 5: Implement the evaluator**
+- [ ] **Step 6: Implement the evaluator**
 
 Create `src/runs/transcript-rules.ts`:
 
@@ -476,15 +548,15 @@ function lastChangeIndex(events: readonly TranscriptEvent[]): number {
 Note that `holds` receives `TranscriptRule` and narrows on `rule.check`; the
 `CommandMatcher` fields are available on the three command branches.
 
-- [ ] **Step 6: Run the tests and confirm they pass**
+- [ ] **Step 7: Run the tests and confirm they pass**
 
 Run: `npm run check`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/runs/transcript-rules.ts src/domain/model.ts src/catalog/load-catalog.ts tests/runs/transcript-rules.test.ts tests/catalog/load-catalog.test.ts
+git add src/runs/transcript-rules.ts src/domain/model.ts schemas/case.schema.json src/catalog/load-catalog.ts tests/runs/transcript-rules.test.ts tests/schemas/validator.test.ts tests/catalog/load-catalog.test.ts
 git commit -m "$(cat <<'EOF'
 feat: evaluate typed transcript rules over normalized events
 
@@ -495,16 +567,16 @@ EOF
 
 ---
 
-### Task 3: Typed rules and transcript-graded assertions in the case schema
+### Task 3: Transcript-graded assertions
 
 **Files:**
-- Modify: `schemas/case.schema.json`
-- Modify: `src/domain/model.ts:16-45`
+- Modify: `schemas/case.schema.json` (the `assertion` definition only)
+- Modify: `src/domain/model.ts:22-26` (`AssertionDeclaration`)
 - Test: `tests/schemas/validator.test.ts`
 
 **Interfaces:**
-- Consumes: `TranscriptRule` from Task 2.
-- Produces: `AssertionDeclaration.transcriptRuleId?: string`; a case schema that accepts the five typed checks and rejects the removed `event` and `beforeStepId` fields.
+- Consumes: `TranscriptRule` and the typed rule schema from Task 2.
+- Produces: `AssertionDeclaration.transcriptRuleId?: string`, and a case schema that accepts it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -533,39 +605,29 @@ test("accepts typed transcript rules and a transcript-graded assertion", async (
   assert.equal(manifest.assertions[1]?.transcriptRuleId, "stopped");
 });
 
-test("rejects the removed free-form transcript rule shape", async () => {
+test("rejects an unknown field on an assertion", async () => {
   const validator = await ManifestValidator.create(schemaDirectory);
   assert.throws(
     () => validator.validateCase({
       ...baseCase,
-      transcriptRules: [{ id: "stopped", event: "assistant_message", beforeStepId: "s2" }],
-    }),
-    /case manifest/,
-  );
-});
-
-test("rejects a command rule without a matcher", async () => {
-  const validator = await ManifestValidator.create(schemaDirectory);
-  assert.throws(
-    () => validator.validateCase({
-      ...baseCase,
-      transcriptRules: [{ id: "tested", check: "command_ran" }],
+      assertions: [{ id: "A1", dimension: "functional", critical: true, gradedBy: "transcript" }],
     }),
     /case manifest/,
   );
 });
 ```
 
-If `tests/schemas/validator.test.ts` has no `baseCase` helper, add one that holds a minimal schema-valid case manifest and reuse it in the three tests above.
+Task 2 already added the `baseCase` helper holding a minimal schema-valid case manifest;
+reuse it.
 
 - [ ] **Step 2: Run the test and confirm it fails**
 
-Run: `npm test -- --test-name-pattern="typed transcript rules"`
-Expected: FAIL — the schema still requires `event` and rejects `check`.
+Run: `npm test -- --test-name-pattern="transcript-graded assertion"`
+Expected: FAIL — `transcriptRuleId` is not an allowed assertion property.
 
-- [ ] **Step 3: Replace the schema definitions**
+- [ ] **Step 3: Extend the assertion definition**
 
-In `schemas/case.schema.json`, replace the `transcriptRule` definition and extend `assertion`:
+In `schemas/case.schema.json`, replace the `assertion` definition:
 
 ```json
     "assertion": {
@@ -578,34 +640,6 @@ In `schemas/case.schema.json`, replace the `transcriptRule` definition and exten
         "critical": { "type": "boolean" },
         "transcriptRuleId": { "$ref": "#/$defs/id" }
       }
-    },
-    "commandMatcher": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "check", "executor", "argsPrefix"],
-      "properties": {
-        "id": { "$ref": "#/$defs/id" },
-        "check": { "enum": ["command_ran", "command_before_file_change", "command_after_file_change"] },
-        "executor": { "type": "string", "minLength": 1 },
-        "argsPrefix": { "type": "array", "items": { "type": "string" } },
-        "expect": { "type": "boolean" }
-      }
-    },
-    "eventPresence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "check"],
-      "properties": {
-        "id": { "$ref": "#/$defs/id" },
-        "check": { "enum": ["no_file_change", "assistant_message"] },
-        "expect": { "type": "boolean" }
-      }
-    },
-    "transcriptRule": {
-      "oneOf": [
-        { "$ref": "#/$defs/eventPresence" },
-        { "$ref": "#/$defs/commandMatcher" }
-      ]
     }
 ```
 
@@ -633,7 +667,7 @@ Expected: PASS.
 ```bash
 git add schemas/case.schema.json src/domain/model.ts tests/schemas/validator.test.ts
 git commit -m "$(cat <<'EOF'
-feat: give transcript rules a typed schema and link them to assertions
+feat: type the transcript rule schema and evaluate rules over events
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 EOF
@@ -975,6 +1009,7 @@ Replace the `step = "execute"` block:
         reasoningEffort: input.configuration.reasoningEffort,
         sandbox: input.configuration.sandbox,
         limits: input.catalogCase.manifest.limits,
+        environment: input.variant.manifest.environment,
       },
       onContinuation: async (continuedStep, events) => {
         const gated = rules.filter((rule) => (continuedStep.continuation?.eventRuleIds ?? []).includes(rule.id));
@@ -2079,9 +2114,6 @@ test("reports a non-zero exit as a process failure", async () => {
 });
 
 test("relativizes file change paths against the workspace", async () => {
-  const { executable } = await createFakeCodex([]);
-  assert.ok(executable.length > 0);
-
   const execution = await run(
     [{ lines: [threadLine("t-1"), changeLine("/nowhere/outside.js"), usageLine(1, 1)] }],
     {},
@@ -2636,6 +2668,7 @@ import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { hashTree, hashValue } from "../dist/src/integrity/content-hash.js";
 
 if (process.env.SKILLBENCH_LIVE !== "1") {
@@ -2643,7 +2676,9 @@ if (process.env.SKILLBENCH_LIVE !== "1") {
   process.exit(2);
 }
 
-const repository = new URL("..", import.meta.url).pathname;
+// fileURLToPath, not .pathname: a repository path with non-ASCII characters
+// comes back percent-encoded from .pathname and resolves to nothing.
+const repository = fileURLToPath(new URL("..", import.meta.url));
 const project = await mkdtemp(join(tmpdir(), "skillbench-smoke-"));
 
 await cp(join(repository, "schemas"), join(project, "schemas"), { recursive: true });
