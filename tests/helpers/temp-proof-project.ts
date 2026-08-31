@@ -10,14 +10,25 @@ export interface TempProofProject {
   readonly carriedTestPath: string;
 }
 
-const honestCheck = `import { readFile } from "node:fs/promises";
+/**
+ * Both checks note that they ran in the file named by SKILLBENCH_PROOF_LOG, when the
+ * caller sets it, so a test can prove that only the check under proof is executed.
+ */
+const noteRun = `import { appendFile } from "node:fs/promises";
+const log = process.env.SKILLBENCH_PROOF_LOG;
+`;
+
+const honestCheck = `${noteRun}import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+if (log !== undefined) await appendFile(log, "honest\\n");
 const workspace = process.env.SKILLBENCH_WORKSPACE;
 const text = await readFile(join(workspace, "value.txt"), "utf8");
 process.exit(text.trim() === "correct" ? 0 : 1);
 `;
 
-const alwaysGreenCheck = `process.exit(0);\n`;
+const alwaysGreenCheck = `${noteRun}if (log !== undefined) await appendFile(log, "always-green\\n");
+process.exit(0);
+`;
 
 const carriedTest = `// The public suite the oracle also carries.\n`;
 

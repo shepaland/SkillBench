@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import { loadCatalog, type CatalogCase } from "../catalog/load-catalog.js";
-import type { AssertionDeclaration } from "../domain/model.js";
+import type { AssertionDeclaration, OracleManifest } from "../domain/model.js";
 import { copySafeTree, isSameOrInside } from "../filesystem/safe-tree.js";
 import { hashFile } from "../integrity/content-hash.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
@@ -76,14 +76,24 @@ export async function proveOracles(input: ProveOraclesInput): Promise<ProofRepor
   const catalog = await loadCatalog(input.root, { requirePrivateOracles: false });
   const selected = selectCases(catalog.cases, input.caseIds, failures);
 
+  // An issue whose source never became a case belongs to no case at all, so a per-case
+  // filter would drop it: a `case.json` that fails to parse would leave this gate green
+  // having proved nothing.
   for (const issue of catalog.issues) {
-    const caseId = caseIdOfSource(issue.source);
-    if (caseId === undefined || !selected.some(({ manifest }) => manifest.id === caseId)) continue;
-    failures.push({ caseId, message: `catalog issue ${issue.code}: ${issue.message}` });
+    const owner = catalog.cases.find(({ source }) => source === issue.source);
+    if (owner !== undefined && !selected.includes(owner)) continue;
+    const message = `catalog issue ${issue.code} in ${issue.source}: ${issue.message}`;
+    failures.push(owner === undefined ? { message } : { caseId: owner.manifest.id, message });
   }
 
   for (const catalogCase of selected) {
     await proveCase({ input, paths, validator, catalogCase, proven, failures });
+  }
+
+  // Proving nothing is never a pass: an empty or unreadable catalog would otherwise
+  // report success without having run a single check.
+  if (proven.length === 0 && failures.length === 0) {
+    failures.push({ message: "nothing was proven: no selected case declares an oracle-graded assertion with a patch" });
   }
 
   return report(proven, failures);
@@ -99,6 +109,10 @@ function selectCases(
   failures: ProofFailure[],
 ): readonly CatalogCase[] {
   if (caseIds === undefined) return cases;
+  if (caseIds.length === 0) {
+    failures.push({ message: "no case was selected, so nothing could be proven" });
+    return [];
+  }
 
   const selected: CatalogCase[] = [];
   for (const caseId of caseIds) {
@@ -110,11 +124,6 @@ function selectCases(
     selected.push(catalogCase);
   }
   return selected;
-}
-
-function caseIdOfSource(source: string): string | undefined {
-  const segments = source.split("/");
-  return segments[0] === "cases" && segments.length === 3 ? segments[1] : undefined;
 }
 
 interface ProveCaseInput {
@@ -186,7 +195,7 @@ async function proveCase(context: ProveCaseInput): Promise<void> {
   for (const assertion of covered) {
     const failureCount = failures.length;
     for (const patch of patchKinds) {
-      await proveAssertionPatch({ context, fixturePath, proofsRoot, assertion, covered, patch });
+      await proveAssertionPatch({ context, fixturePath, proofsRoot, assertion, patch });
     }
     if (failures.length === failureCount) {
       context.proven.push({ caseId, assertionId: assertion.id });
@@ -224,8 +233,6 @@ interface ProveAssertionPatchInput {
   readonly fixturePath: string;
   readonly proofsRoot: string;
   readonly assertion: AssertionDeclaration;
-  /** Every oracle-graded assertion the manifest declares a check for. */
-  readonly covered: readonly AssertionDeclaration[];
   readonly patch: PatchKind;
 }
 
@@ -255,9 +262,7 @@ async function proveAssertionPatch(input: ProveAssertionPatchInput): Promise<voi
       label: `case ${caseId} assertion ${assertion.id} ${patch} patch`,
     });
 
-    // `runOracle` insists the assertion list and the manifest cover each other, so
-    // every assertion the manifest checks is run and this one is picked by ID.
-    const outcome = await gradeWorkspace({ context, caseId, workspacePath, assertion, assertions: input.covered });
+    const outcome = await gradeWorkspace({ context, caseId, workspacePath, assertion });
 
     const expected = patch === "pass" ? "passed" : "failed";
     if (outcome.outcome === expected) return;
@@ -285,7 +290,6 @@ interface GradeWorkspaceInput {
   readonly caseId: string;
   readonly workspacePath: string;
   readonly assertion: AssertionDeclaration;
-  readonly assertions: readonly AssertionDeclaration[];
 }
 
 async function gradeWorkspace(input: GradeWorkspaceInput): Promise<{ outcome: string; detail: string }> {
@@ -298,13 +302,26 @@ async function gradeWorkspace(input: GradeWorkspaceInput): Promise<{ outcome: st
   const mounted = await lifecycle.mountOracle();
   try {
     const manifest = await loadOracleManifest(mounted.gradingPath, input.context.validator);
+    const check = manifest.checks.find(({ assertionId }) => assertionId === input.assertion.id);
+    if (check === undefined) {
+      throw new Error(`the mounted oracle declares no check for assertion ${input.assertion.id}`);
+    }
+
+    // Only the check under proof runs. `runOracle` insists the assertion list and the
+    // manifest cover each other, so both are narrowed to this one assertion: an
+    // unrelated check must not decide, or slow down, this assertion's proof.
+    const narrowed: OracleManifest = {
+      schemaVersion: manifest.schemaVersion,
+      caseId: manifest.caseId,
+      checks: [check],
+    };
     const results = await runOracle({
-      manifest,
-      assertions: input.assertions,
+      manifest: narrowed,
+      assertions: [input.assertion],
       gradingPath: mounted.gradingPath,
       workspacePath: input.workspacePath,
     });
-    const result = results.find(({ assertionId }) => assertionId === input.assertion.id);
+    const result = results[0];
     if (result === undefined) {
       throw new Error(`the oracle returned no result for assertion ${input.assertion.id}`);
     }
@@ -325,8 +342,10 @@ async function verifyBaseline(
   try {
     text = await readFile(join(oracleDirectory, "baseline.json"), "utf8");
   } catch (error: unknown) {
-    if (isMissingPath(error)) return;
-    failures.push({ caseId, message: `baseline.json could not be read: ${errorMessage(error)}` });
+    // A silent skip here would disable both the fixture comparison and the carried-test
+    // comparison, which is the vacuous pass this tool exists to catch.
+    const reason = isMissingPath(error) ? "it does not exist" : errorMessage(error);
+    failures.push({ caseId, message: `the oracle has no readable baseline.json: ${reason}` });
     return;
   }
 
