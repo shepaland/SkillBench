@@ -293,3 +293,36 @@ test("rejects a command rule without a matcher", async () => {
     /oneOf/,
   );
 });
+
+test("accepts typed transcript rules and a transcript-graded assertion", async () => {
+  const validator = await ManifestValidator.create(schemaDirectory);
+  const manifest = validator.validateCase({
+    ...baseCase,
+    promptSteps: [
+      { id: "s1", prompt: "ask first", continuation: { eventRuleIds: ["stopped"] } },
+      { id: "s2", prompt: "now do it" },
+    ],
+    transcriptRules: [
+      { id: "stopped", check: "no_file_change" },
+      { id: "tested", check: "command_before_file_change", executor: "node", argsPrefix: ["--test"] },
+    ],
+    assertions: [
+      { id: "A1", dimension: "functional", critical: true },
+      { id: "A2", dimension: "process", critical: false, transcriptRuleId: "stopped" },
+    ],
+  });
+
+  assert.equal(manifest.transcriptRules?.[0]?.check, "no_file_change");
+  assert.equal(manifest.assertions[1]?.transcriptRuleId, "stopped");
+});
+
+test("rejects an unknown field on an assertion", async () => {
+  const validator = await ManifestValidator.create(schemaDirectory);
+  assert.throws(
+    () => validator.validateCase({
+      ...baseCase,
+      assertions: [{ id: "A1", dimension: "functional", critical: true, gradedBy: "transcript" }],
+    }),
+    /additionalProperties/,
+  );
+});

@@ -23,6 +23,8 @@ export interface AssertionDeclaration {
   readonly id: string;
   readonly dimension: "functional" | "regression" | "security" | "scope" | "process";
   readonly critical: boolean;
+  /** When set, SkillBench grades this assertion from the named rule and the oracle must not cover it. */
+  readonly transcriptRuleId?: string;
 }
 
 export interface CommandMatcher {

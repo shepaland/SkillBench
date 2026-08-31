@@ -139,10 +139,9 @@
       "required": ["id", "dimension", "critical"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "dimension": {
-          "enum": ["functional", "regression", "security", "scope", "process"]
-        },
-        "critical": { "type": "boolean" }
+        "dimension": { "enum": ["functional", "regression", "security", "scope", "process"] },
+        "critical": { "type": "boolean" },
+        "transcriptRuleId": { "$ref": "#/$defs/id" }
       }
     },
     "commandMatcher": {
