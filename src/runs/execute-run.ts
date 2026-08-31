@@ -156,6 +156,17 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       gradingPath: mounted.gradingPath,
       workspacePath: workspace.workspacePath,
     });
+    // A check runs code the measured agent wrote, so the grading directory is hashed
+    // again once every check has finished. An oracle that changed during grading may
+    // have graded the agent against material the agent itself supplied, which makes
+    // every assertion of this run worthless, whatever it says.
+    const gradedOracleHash = await hashTree(mounted.gradingPath);
+    if (gradedOracleHash !== manifest.oracleHash) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `private oracle changed while the checks ran: mounted ${gradedOracleHash}, frozen ${manifest.oracleHash}`,
+      );
+    }
     assertions = mergeAssertions(input.catalogCase.manifest.assertions, oracleResults, ruleOutcomes);
 
     step = "verify_fixture";

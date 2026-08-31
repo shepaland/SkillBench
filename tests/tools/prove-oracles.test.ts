@@ -81,6 +81,15 @@ test("a carried test file that drifts from the fixture is reported", async (t) =
     /baseline/.test(failure.message) && failure.message.includes(project.carriedTestPath)));
 });
 
+test("a public test file the oracle no longer carries is reported", async (t) => {
+  const project = await proofProject(t);
+  await rm(join(project.root, ".private/oracles/T01", project.carriedTestPath));
+
+  const report = await proveOracles({ root: project.root });
+  assert.ok(report.failures.some((failure) =>
+    /carr/.test(failure.message) && failure.message.includes(project.carriedTestPath)));
+});
+
 test("an oracle-graded assertion with no check yet is reported, not skipped", async (t) => {
   const project = await proofProject(t);
   const manifestPath = join(project.root, ".private/oracles/T01/oracle.json");

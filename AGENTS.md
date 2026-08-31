@@ -64,6 +64,16 @@ These two commands need the private repository cloned into `.private/` and do no
 - `npm run oracles:proof` composes a correct and a deliberately broken copy of each case's project and grades both through SkillBench's own mounting and oracle-running code, proving that every oracle-graded assertion can both pass and fail. It is deliberately outside `npm run check`.
 - `npm --prefix .private run check` verifies the composed oracles still match their sources and runs the private repository's own tests. Use `npm --prefix .private run build` to recompose them after editing a source.
 
+Their order matters. `npm run oracles:proof` reads the composed oracle under `.private/oracles/`, not the sources, so `npm --prefix .private run check` must run first; otherwise a stale composed oracle is what gets proven. The delivery gate is these five commands in this order, and all five must exit `0`:
+
+```sh
+npm --prefix .private run check
+npm run check
+npm run build
+node dist/src/cli.js validate --project .
+npm run oracles:proof
+```
+
 ## Architecture
 
 - `src/domain/` contains runtime-neutral types and errors.
@@ -106,7 +116,8 @@ Keep case definitions independent of a specific agent runtime. Keep skills as da
 - Never hand-edit a composed oracle (`.private/oracles/<case-id>/`); edit its source under `.private/sources/` and regenerate it with `npm --prefix .private run build`. This is the same discipline the composed fixtures follow.
 - A case's `categories` come from a closed vocabulary: `bug-fix`, `bounded-feature`, `ambiguous-feature`, `architectural-feature`, `compatibility`, `refactoring`, `security`, `scope-control`, and `process`. `schemas/case.schema.json` accepts any non-empty string, so this is a convention the reviewer enforces, not the schema.
 - An oracle check never writes into the agent's workspace. It copies what it needs into its own temporary directory and removes that directory in every case, including when the assertion does not hold.
-- `tests/` stays an allowed change path in every case. Forbidding it would punish any skill that writes a test first. The protection against a weakened test is that the oracle carries its own copy of the public suite and grades against that copy, not against the one in the workspace.
+- A check runs code the measured agent wrote, so that code must never learn where the grading directory is. The shared oracle helper reads `SKILLBENCH_WORKSPACE` and `SKILLBENCH_ORACLE` once when it loads, removes them from `process.env`, and hands every child process an environment without them. As a second line of defence, `executeRun` hashes the mounted oracle again after the last check and reports the run as errored at the `grade` step when it changed.
+- `tests/` stays an allowed change path in every case. Forbidding it would punish any skill that writes a test first. The protection against a weakened test is that the oracle carries its own copy of the public suite and grades against that copy, not against the one in the workspace. `npm run oracles:proof` compares that carried copy with the baseline in both directions, so an oracle that carries only part of the suite is a failure too.
 - Never write a public QueueDesk test that observes cross-tenant `claim` or `complete`, an interrupted write, a timestamp value, `orderJobs` directly, or job ordering through `list --json`, because the seeded defects live in exactly those gaps.
 
 ## Known Limitations to Preserve or Resolve Explicitly

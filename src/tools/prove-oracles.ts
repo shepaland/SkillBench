@@ -414,6 +414,7 @@ async function verifyCarriedTests(
     return;
   }
 
+  const carriedPaths = new Set(carried.map((relativePath) => `tests/${relativePath}`));
   for (const relativePath of carried) {
     const baselinePath = `tests/${relativePath}`;
     const expected = baseline.files[baselinePath];
@@ -428,6 +429,17 @@ async function verifyCarriedTests(
         message: `oracle test file ${JSON.stringify(baselinePath)} does not match the baseline entry`,
       });
     }
+  }
+
+  // The comparison has to run in both directions. An oracle carrying only part of the
+  // public suite matches every file it has and would grade the regression assertion
+  // against a quietly weakened suite for as long as nobody noticed.
+  for (const baselinePath of Object.keys(baseline.files).sort()) {
+    if (!baselinePath.startsWith("tests/") || carriedPaths.has(baselinePath)) continue;
+    failures.push({
+      caseId,
+      message: `public test file ${JSON.stringify(baselinePath)} is not carried by the oracle`,
+    });
   }
 }
 

@@ -154,6 +154,33 @@ test("a private oracle changed after freezing reports errored at the grade step"
   assert.equal(result.assertions.length, 0);
 });
 
+test("a private oracle changed while the checks ran reports errored at the grade step", async () => {
+  // A check runs code the measured agent wrote, so the grading directory can be
+  // rewritten between the pre-run hash and the last assertion. The assertions of such
+  // a run cannot be trusted, whatever they say.
+  const harness = await createHarness(async (project) => {
+    await writeFile(
+      join(project.oracleDirectory, "checks/assert-1.js"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'writeFileSync(join(process.env.SKILLBENCH_ORACLE, "planted.txt"), "tampered\\n");',
+        "process.exit(0);",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2dc"));
+
+  assert.equal(result.status, "errored");
+  assert.equal(result.failedStep, "grade");
+  assert.match(result.failureMessage, /private oracle changed while the checks ran/u);
+  assert.match(result.failureMessage, /mounted sha256:[0-9a-f]{64}/u);
+  assert.match(result.failureMessage, /frozen sha256:[0-9a-f]{64}/u);
+  assert.equal(result.assertions.length, 0);
+});
+
 test("an exhausted adapter reports exhausted and still grades", async () => {
   const harness = await createHarness();
   const exhaustedAdapter: RuntimeAdapter = {
