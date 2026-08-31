@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a05672-40b8-7db1-823a-39a2fc5a735f"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll update `note.txt` directly with the file editing tool."}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/note.txt","kind":"update"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/note.txt","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Updated `note.txt` to `goodbye`."}}
+{"type":"turn.completed","usage":{"input_tokens":31504,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":80,"reasoning_output_tokens":0}}

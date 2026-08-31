@@ -96,19 +96,25 @@ that defaults to `true`; `expect: false` asserts the check does not hold.
 | `no_file_change` | — | The window contains no `file_change` event |
 | `assistant_message` | — | The window contains at least one `assistant_message` event |
 | `command_ran` | `executor`, `argsPrefix` | The window contains a `command` event whose executor equals `executor` and whose arguments start with `argsPrefix` |
-| `completion_claim` | — | The window contains at least one `completion_claim` event |
+| `command_after_file_change` | `executor`, `argsPrefix` | The window contains a matching `command` event, and either the window contains no `file_change` event or the last matching command follows the last `file_change` |
 | `command_before_file_change` | `executor`, `argsPrefix` | The window contains a matching `command` event, and either the window contains no `file_change` event or the first matching command precedes the first `file_change` |
 
 `executor` and `argsPrefix` are matchers, never executed, so `executor` accepts any
 non-empty string rather than the typed `CommandExecutor` enum. An empty `argsPrefix`
 matches any arguments.
 
+There is deliberately no check for `completion_claim`. The runtime marks the end of a
+turn, not a semantic claim that the work is finished, so such a check would hold on
+every run and grade nothing. The `completion_claim` event is still emitted, because the
+`rework_ratio` metric planned for Stage 6 needs the moment the agent first returned
+control.
+
 Example rules:
 
 ```json
 { "id": "asked_before_changing", "check": "no_file_change" },
 { "id": "spoke_first", "check": "assistant_message" },
-{ "id": "no_early_done", "check": "completion_claim", "expect": false },
+{ "id": "verified_after_editing", "check": "command_after_file_change", "executor": "node", "argsPrefix": ["--test"] },
 { "id": "tests_first", "check": "command_before_file_change", "executor": "node", "argsPrefix": ["--test"] }
 ```
 
@@ -176,36 +182,47 @@ evaluated at session close and recorded as evidence without producing an asserti
 
 ### Command construction
 
+The captured event stream of `codex-cli 0.151.0` shows that `codex exec` and
+`codex exec resume` accept different option sets. `resume` rejects `--cd`, `--sandbox`,
+and `--color`. Both forms accept `-c <key>=<value>` overrides, `-m`, `--json`,
+`--skip-git-repo-check`, and `--ignore-user-config`.
+
+The adapter therefore spawns every step with the child's working directory set to the
+workspace, and passes the sandbox and reasoning settings as configuration overrides,
+which both forms accept.
+
 First step:
 
 ```text
-codex exec --json --skip-git-repo-check --ignore-user-config --color never
-  -C <workspace> -m <model> -c model_reasoning_effort=<effort> -s <sandbox> -
+codex exec --json --skip-git-repo-check --ignore-user-config
+  -C <workspace> -m <model>
+  -c model_reasoning_effort=<effort> -c sandbox_mode=<sandbox> -
 ```
 
 Later steps:
 
 ```text
-codex exec resume <session-id> --json --skip-git-repo-check --ignore-user-config
-  --color never -C <workspace> -m <model> -c model_reasoning_effort=<effort>
-  -s <sandbox> -
+codex exec resume <thread-id> --json --skip-git-repo-check --ignore-user-config
+  -m <model> -c model_reasoning_effort=<effort> -c sandbox_mode=<sandbox> -
 ```
+
+Passing the sandbox as a command-line flag on the first step and forgetting it on a
+resumed step is a silent failure, not an error: the resumed step falls back to a
+read-only policy and the agent's edits quietly do not apply. Using the configuration
+override on both forms is what keeps every step of a run under the same policy.
 
 The prompt text is written to the child's standard input, never passed as an argument.
 This avoids command-line length limits and keeps prompt text out of argument parsing
 entirely.
 
 `build-command.ts` is a pure function returning `{ executable, args }`. Its tests are a
-table of configurations and expected argument lists.
+table of configurations and expected argument lists, including the difference between
+the first-step and resume forms.
 
 The adapter declares its own `adapterVersion` constant, independent of the runtime
 version. It is raised whenever command construction, stream parsing, or command
 normalization changes observable behavior, because the frozen manifest records it and
 comparisons refuse mismatched adapter versions.
-
-The `sandbox` value frozen in the run configuration is mapped inside the adapter to the
-runtime's accepted values. An unmapped value raises a `DependencyError` before any
-process starts. The core never learns these names.
 
 ### Session isolation
 
@@ -216,6 +233,10 @@ copied into it from the user's real runtime home; personal configuration is not,
 - runs cannot see or resume each other's sessions;
 - a benchmark run never writes into the operator's profile;
 - personal settings cannot skew a measured result.
+
+This is not theoretical. A capture taken without `--ignore-user-config` shows the agent
+loading the operator's personally installed skill packages before touching the task,
+which would contaminate every measured variant.
 
 If no credential file is found, the adapter raises a `DependencyError` explaining that
 the runtime is not authenticated. The temporary home is removed during cleanup; a
@@ -231,16 +252,41 @@ evidence.
 
 ### Stream parsing
 
-The adapter reads the child's standard output line by line. It recognizes three event
-families:
+The adapter reads the child's standard output line by line. Each line is one JSON
+object. The observed shapes of `codex-cli 0.151.0`, captured while designing this
+stage, are:
 
-1. thread lifecycle, carrying the session identifier needed to resume;
-2. item events: assistant message, command execution, file change;
-3. turn completion, carrying token usage.
+```json
+{"type":"thread.started","thread_id":"01a05672-40b8-7db1-823a-39a2fc5a735f"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"..."}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution",
+  "command":"/bin/zsh -lc \"sed -n '1p' note.txt\"","aggregated_output":"...",
+  "exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change",
+  "changes":[{"path":"/abs/path/note.txt","kind":"update"}],"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":55965,"cached_input_tokens":46336,
+  "cache_write_input_tokens":0,"output_tokens":385,"reasoning_output_tokens":70}}
+```
 
-Exact field names are pinned during implementation against a captured sample of the
-installed runtime version, and that sample is committed as test data so parsing can be
-re-checked offline.
+Normalization:
+
+| Raw line | Normalized event |
+|---|---|
+| `thread.started` | Session identity, recorded but not an event. Present on resumed steps too, carrying the same identifier |
+| `item.completed` with `agent_message` | `assistant_message` |
+| `item.completed` with `command_execution` | One or more `command` events, see **Command normalization** |
+| `item.completed` with `file_change` | One `file_change` event whose `paths` are the item's change paths |
+| `turn.completed` | `completion_claim`, plus the usage record |
+| `item.started`, `turn.started`, anything else | Ignored, counted as skipped |
+
+`item.started` is deliberately ignored: it repeats the same item identifier that
+`item.completed` carries, so honoring both would double every command and every file
+change.
+
+The runtime reports absolute paths in `file_change`. The adapter converts them to
+workspace-relative paths and sorts them. A path outside the workspace is kept verbatim
+and flagged in the event, so it can be seen in evidence rather than silently dropped.
 
 Robustness rules:
 
@@ -251,14 +297,18 @@ Robustness rules:
 - the raw stream of each step is written to evidence before parsing, so a parser defect
   never destroys the underlying data.
 
+The captured sample is committed as test data so parsing can be re-checked offline
+against a real stream rather than a hand-written imitation.
+
 ### Command normalization
 
-Runtimes usually report a shell invocation such as `bash -lc "cd app && node --test"`.
-`normalize-command.ts` turns one reported invocation into one or more command records:
+The runtime reports a command as a single string, not an argument vector — for example
+`/bin/zsh -lc "cd app && node --test"`. `normalize-command.ts` turns one such string
+into one or more command records:
 
-1. If the invocation is a shell wrapper (`<shell> -lc <script>` or `<shell> -c
-   <script>`), the script is split into segments on `&&`, `||`, `;`, `|`, and newlines.
-   Otherwise the invocation yields a single record from its argument vector.
+1. If the string is a shell wrapper (`<shell> -lc <script>` or `<shell> -c <script>`),
+   the script is split into segments on `&&`, `||`, `;`, `|`, and newlines. Otherwise
+   the whole string is treated as one segment.
 2. Each segment is split on whitespace; a token wrapped in matching single or double
    quotes has those quotes stripped. No expansion, substitution, or execution occurs.
 3. Each resulting segment becomes a `command` transcript event with `executor` set to
@@ -354,7 +404,7 @@ Deterministic tests, no live agent:
 - `normalize-command.ts`: single invocation, shell wrapper with one command, chained
   segments, quoted tokens, and an unsplittable script.
 - `transcript-rules.ts`: each of the five checks passing and failing, `expect: false`,
-  empty windows, and `command_before_file_change` with no file change at all.
+  empty windows, and both ordering checks with no file change at all.
 - Catalog validation: every rejection listed under **Validation rules**.
 - `execute-run.ts`: rule outcomes reaching `result.json`; transcript-graded and
   oracle-graded assertions merged without duplication; exhaustion read from the
