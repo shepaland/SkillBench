@@ -129,7 +129,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     await writer.writeTranscript(execution, ruleOutcomes);
 
     step = "final_snapshot";
-    changes = diffSnapshots(baseline, await snapshotTree(workspace.workspacePath));
+    const finalSnapshot = await snapshotTree(workspace.workspacePath);
+    changes = diffSnapshots(baseline, finalSnapshot);
     observations = observeChangePaths(
       changes,
       input.catalogCase.manifest.allowedChangePaths,
@@ -165,6 +166,17 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       throw new FileLifecycleError(
         "CONTENT_HASH_MISMATCH",
         `private oracle changed while the checks ran: mounted ${gradedOracleHash}, frozen ${manifest.oracleHash}`,
+      );
+    }
+    // A check also runs the agent's code against the workspace, so the workspace is
+    // snapshotted again once every check has finished. The assertions are supposed to
+    // describe the final snapshot; a workspace repaired during grading makes them
+    // describe a tree that no longer exists, whatever they say.
+    const gradedChanges = diffSnapshots(finalSnapshot, await snapshotTree(workspace.workspacePath));
+    if (isChanged(gradedChanges)) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `the workspace changed while the checks ran: ${describeChanges(gradedChanges)}`,
       );
     }
     assertions = mergeAssertions(input.catalogCase.manifest.assertions, oracleResults, ruleOutcomes);
@@ -234,6 +246,22 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
 
   await writer.writeResult(result);
   return result;
+}
+
+function isChanged(changes: ChangeSet): boolean {
+  return changes.added.length + changes.modified.length + changes.removed.length > 0;
+}
+
+/**
+ * Names every path of a change set, so an investigator reading a rejected run learns
+ * what moved rather than only that something did.
+ */
+function describeChanges(changes: ChangeSet): string {
+  return [
+    ...changes.added.map((path) => `added ${path}`),
+    ...changes.modified.map((path) => `modified ${path}`),
+    ...changes.removed.map((path) => `removed ${path}`),
+  ].join(", ");
 }
 
 function mergeAssertions(

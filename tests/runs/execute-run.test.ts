@@ -181,6 +181,37 @@ test("a private oracle changed while the checks ran reports errored at the grade
   assert.equal(result.assertions.length, 0);
 });
 
+test("a workspace changed while the checks ran reports errored at the grade step", async () => {
+  // A check runs code the measured agent wrote, so that code can repair the workspace
+  // between the final snapshot and the last assertion. The assertions then describe a
+  // tree that no longer exists, so they cannot be trusted, whatever they say.
+  const harness = await createHarness(async (project) => {
+    await writeFile(
+      join(project.oracleDirectory, "checks/assert-1.js"),
+      [
+        'import { rmSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const workspace = process.env.SKILLBENCH_WORKSPACE;",
+        'writeFileSync(join(workspace, "planted.txt"), "restored\\n");',
+        'writeFileSync(join(workspace, "index.js"), "export const queued = [1];\\n");',
+        'rmSync(join(workspace, ".agent/skills/example/SKILL.md"));',
+        "process.exit(0);",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2dd"));
+
+  assert.equal(result.status, "errored");
+  assert.equal(result.failedStep, "grade");
+  assert.match(result.failureMessage, /the workspace changed while the checks ran/u);
+  assert.match(result.failureMessage, /added planted\.txt/u);
+  assert.match(result.failureMessage, /modified index\.js/u);
+  assert.match(result.failureMessage, /removed \.agent\/skills\/example\/SKILL\.md/u);
+  assert.equal(result.assertions.length, 0);
+});
+
 test("an exhausted adapter reports exhausted and still grades", async () => {
   const harness = await createHarness();
   const exhaustedAdapter: RuntimeAdapter = {
