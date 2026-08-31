@@ -17,3 +17,22 @@ test("the repository ships the control variant", async () => {
   assert.deepEqual(control.manifest.installs, []);
   assert.ok(control.manifest.compatibleRuntimes.includes("codex"));
 });
+
+test("case B01 declares five oracle-graded assertions", async () => {
+  const catalog = await loadCatalog(repositoryRoot, { requirePrivateOracles: false });
+  const found = catalog.cases.find((entry) => entry.manifest.id === "B01");
+  assert.ok(found, "case B01 is missing");
+  assert.deepEqual(
+    found.manifest.assertions.map((assertion) => assertion.id).toSorted(),
+    [
+      "functional-claim-priority",
+      "functional-json-order",
+      "functional-renderer-neutral",
+      "regression-public-suite",
+      "scope-untouched-files",
+    ],
+  );
+  assert.ok(found.manifest.assertions.every((assertion) => assertion.transcriptRuleId === undefined));
+  assert.equal(found.manifest.categories.length, 1);
+  assert.equal(found.manifest.categories[0], "bug-fix");
+});

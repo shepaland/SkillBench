@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "B01",
+  "title": "Claim hands out the wrong job",
+  "categories": ["bug-fix"],
+  "fixture": {
+    "path": "fixtures/queuedesk-claim-order",
+    "contentHash": "sha256:889e14bf26e6cd2a819ec5824ca6a2d5135f960fab784c50c2f941dd8c3eac3a"
+  },
+  "promptSteps": [
+    {
+      "id": "report",
+      "prompt": "Workers are getting the wrong job out of QueueDesk. `queuedesk claim` is supposed to hand back the highest-priority queued job the caller can see, and instead it hands back the oldest one. One test in the public suite already fails because of this. Please fix the cause rather than the failing test. The design decisions recorded in DECISIONS.md still stand, so keep the code consistent with them, and leave the rest of the suite green. Run `npm test` in the project root to check your work."
+    }
+  ],
+  "publicVerification": [{ "executor": "npm", "args": ["test"] }],
+  "limits": { "wallClockMs": 900000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["src", "tests"],
+  "forbiddenChangePaths": ["DECISIONS.md", "README.md", "examples", "package.json"],
+  "assertions": [
+    { "id": "functional-claim-priority", "dimension": "functional", "critical": true },
+    { "id": "functional-json-order", "dimension": "functional", "critical": true },
+    { "id": "regression-public-suite", "dimension": "regression", "critical": true },
+    { "id": "functional-renderer-neutral", "dimension": "functional", "critical": false },
+    { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
+  ]
+}
