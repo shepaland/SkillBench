@@ -24,7 +24,6 @@ export type CatalogIssueCode =
   | "ORACLE_MANIFEST_INVALID"
   | "ORACLE_UNAVAILABLE"
   | "SCHEMA_VALIDATION"
-  | "TRANSCRIPT_STEP_NOT_FOUND"
   | "VARIANT_HASH_MISMATCH"
   | "VARIANT_SOURCE_UNAVAILABLE";
 
@@ -334,7 +333,6 @@ function validateTranscriptReferences(
   source: string,
   issues: CatalogIssue[],
 ): void {
-  const promptStepIds = new Set(manifest.promptSteps.map(({ id }) => id));
   const transcriptRuleIds = new Set((manifest.transcriptRules ?? []).map(({ id }) => id));
 
   for (const step of manifest.promptSteps) {
@@ -347,17 +345,6 @@ function validateTranscriptReferences(
           `prompt step ${JSON.stringify(step.id)} references missing transcript rule ${JSON.stringify(ruleId)}`,
         );
       }
-    }
-  }
-
-  for (const rule of manifest.transcriptRules ?? []) {
-    if (rule.beforeStepId !== undefined && !promptStepIds.has(rule.beforeStepId)) {
-      addIssue(
-        issues,
-        source,
-        "TRANSCRIPT_STEP_NOT_FOUND",
-        `transcript rule ${JSON.stringify(rule.id)} references missing prompt step ${JSON.stringify(rule.beforeStepId)}`,
-      );
     }
   }
 }

@@ -65,23 +65,19 @@ test("reports assertion identifiers duplicated with different declarations", asy
   assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), ["DUPLICATE_ASSERTION_ID"]);
 });
 
-test("reports continuation references to absent rules and prompt steps independently", async () => {
+test("reports continuation references to absent transcript rules", async () => {
   const project = await createTempProject();
   const promptStep = project.caseManifest.promptSteps[0];
-  const transcriptRule = project.caseManifest.transcriptRules?.[0];
   assert.ok(promptStep);
-  assert.ok(transcriptRule);
   await writeJson(project.caseManifestPath, {
     ...project.caseManifest,
     promptSteps: [
       { ...promptStep, continuation: { eventRuleIds: ["missing-rule"] } },
     ],
-    transcriptRules: [{ ...transcriptRule, beforeStepId: "missing-step" }],
   });
 
   assert.deepEqual(issueCodes((await loadCatalog(project.root)).issues), [
     "CONTINUATION_RULE_NOT_FOUND",
-    "TRANSCRIPT_STEP_NOT_FOUND",
   ]);
 });
 

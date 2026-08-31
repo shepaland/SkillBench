@@ -26,9 +26,11 @@ function validCase() {
     allowedChangePaths: ["src"],
     forbiddenChangePaths: ["secrets"],
     assertions: [{ id: "assert-1", dimension: "functional", critical: true }],
-    transcriptRules: [{ id: "rule-1", event: "question", beforeStepId: "step-1" }],
+    transcriptRules: [{ id: "rule-1", check: "no_file_change" }],
   };
 }
+
+const baseCase = validCase();
 
 function validVariant() {
   return {
@@ -267,5 +269,27 @@ test("validation failures use ValidationError and deterministic path-keyword ord
       assert.match(lines[1] ?? "", /^case \/id pattern:/);
       return true;
     },
+  );
+});
+
+test("rejects the removed free-form transcript rule shape", async () => {
+  const validator = await ManifestValidator.create(schemaDirectory);
+  assert.throws(
+    () => validator.validateCase({
+      ...baseCase,
+      transcriptRules: [{ id: "stopped", event: "assistant_message", beforeStepId: "s2" }],
+    }),
+    /oneOf/,
+  );
+});
+
+test("rejects a command rule without a matcher", async () => {
+  const validator = await ManifestValidator.create(schemaDirectory);
+  assert.throws(
+    () => validator.validateCase({
+      ...baseCase,
+      transcriptRules: [{ id: "tested", check: "command_ran" }],
+    }),
+    /oneOf/,
   );
 });
