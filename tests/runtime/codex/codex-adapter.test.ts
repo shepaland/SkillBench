@@ -288,8 +288,9 @@ test("records a home removal failure without replacing the run outcome", async (
 
     assert.equal(execution.process.exitCode, 0);
     assert.equal(execution.events.at(-1)?.type, "session_closed");
-    assert.equal(execution.cleanupFailures?.length, 1);
-    assert.match(execution.cleanupFailures?.[0] ?? "", /^codex home .+: home is busy$/u);
+    const failures = execution.cleanupFailures ?? [];
+    assert.equal(failures.length, 1);
+    assert.match(failures[0] ?? "", /^codex home .+: home is busy$/u);
   } finally {
     codexHomeFileSystem.rm = original;
   }

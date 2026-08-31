@@ -6,7 +6,7 @@ import { DependencyError } from "../../domain/errors.js";
 const credentialFilename = "auth.json";
 
 export interface CodexHomeFileSystem {
-  rm(path: string, options: { readonly recursive: boolean; readonly force: boolean }): Promise<void>;
+  rm: (path: string, options: { readonly recursive: boolean; readonly force: boolean }) => Promise<void>;
 }
 
 /** The removal `cleanup` performs. Replaceable so tests can exercise a removal failure. */
