@@ -212,6 +212,38 @@ test("a workspace changed while the checks ran reports errored at the grade step
   assert.equal(result.assertions.length, 0);
 });
 
+test("a large change set produces a bounded failure message that names the omitted count", async () => {
+  // A check can plant thousands of paths in one pass. failureMessage is written verbatim
+  // into result.json, a shared durable artifact, so the path list must stay bounded like
+  // run-oracle's truncated `detail`, not grow without limit.
+  const harness = await createHarness(async (project) => {
+    await writeFile(
+      join(project.oracleDirectory, "checks/assert-1.js"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const workspace = process.env.SKILLBENCH_WORKSPACE;",
+        "for (let i = 0; i < 2000; i += 1) {",
+        '  writeFileSync(join(workspace, `planted-${String(i).padStart(4, "0")}.txt`), "tampered\\n");',
+        "}",
+        "process.exit(0);",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2df"));
+
+  assert.equal(result.status, "errored");
+  assert.equal(result.failedStep, "grade");
+  assert.match(result.failureMessage, /the workspace changed while the checks ran/u);
+  assert.ok(
+    result.failureMessage.length < 1000,
+    `expected a bounded message, got ${String(result.failureMessage.length)} chars`,
+  );
+  assert.match(result.failureMessage, /and \d+ more paths? omitted/u);
+});
+
 test("an exhausted adapter reports exhausted and still grades", async () => {
   const harness = await createHarness();
   const exhaustedAdapter: RuntimeAdapter = {

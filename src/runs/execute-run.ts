@@ -252,16 +252,35 @@ function isChanged(changes: ChangeSet): boolean {
   return changes.added.length + changes.modified.length + changes.removed.length > 0;
 }
 
+// failureMessage is written verbatim into result.json, a shared durable artifact, and
+// printed to stderr — the same reason run-oracle's `detail` is capped at 500 characters.
+const DESCRIBE_CHANGES_LIMIT = 500;
+
 /**
- * Names every path of a change set, so an investigator reading a rejected run learns
- * what moved rather than only that something did.
+ * Names as many paths of a change set as fit within the limit, so an investigator
+ * reading a rejected run learns what moved without the message growing unbounded when a
+ * check plants thousands of paths in one pass.
  */
 function describeChanges(changes: ChangeSet): string {
-  return [
+  const entries = [
     ...changes.added.map((path) => `added ${path}`),
     ...changes.modified.map((path) => `modified ${path}`),
     ...changes.removed.map((path) => `removed ${path}`),
-  ].join(", ");
+  ];
+
+  const kept: string[] = [];
+  let length = 0;
+  for (const entry of entries) {
+    const nextLength = length + (kept.length > 0 ? 2 : 0) + entry.length;
+    if (nextLength > DESCRIBE_CHANGES_LIMIT) break;
+    kept.push(entry);
+    length = nextLength;
+  }
+
+  const omitted = entries.length - kept.length;
+  if (omitted === 0) return kept.join(", ");
+  const suffix = `and ${String(omitted)} more path${omitted === 1 ? "" : "s"} omitted`;
+  return kept.length === 0 ? suffix : `${kept.join(", ")} (${suffix})`;
 }
 
 function mergeAssertions(

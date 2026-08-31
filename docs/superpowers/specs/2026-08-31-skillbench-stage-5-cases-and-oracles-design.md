@@ -175,6 +175,34 @@ oracle, and an oracle that carries only part of the suite, are both caught there
   oracle by some route the environment scrub does not cover still changes those
   bytes, and a run whose oracle changed while the checks ran is reported as
   errored at the `grade` step rather than graded.
+- The workspace is snapshotted again after the last check has finished and
+  compared with the snapshot taken before the checks ran. A check runs code the
+  agent wrote, so that code can repair the workspace before grading finishes; a
+  run whose workspace changed while the checks ran is reported as errored at the
+  `grade` step rather than graded, the same way an oracle change is.
+
+Both guards make an ordinary run trustworthy, and reject every tampering attempt
+that leaves the end state different from what it should be: repair during the
+first check, repair during a later check, and partial repair are all caught.
+Neither guard catches a net-zero change. Agent-authored code running inside a
+check can repair the workspace, let a later check (such as a scope check) read
+the tidy tree, and then restore the damage byte for byte before grading ends —
+for example from a detached watcher process the check spawns and leaves
+running. The post-check snapshot then equals the pre-check one and the guard
+sees nothing to report. This was reproduced four times out of four against
+`B01`. Today's defense against the unraced form of that attack is incidental,
+not structural: `runOracle` executes assertions in the order the case manifest
+declares them in, not the order `oracle.json` declares checks in, and `B01`
+only survives because `scope-untouched-files` happens to be declared last in
+`cases/B01/case.json`. Nothing documents or enforces that an integrity-relevant
+assertion must be declared last, so until the gap below is closed, treat "declare
+it last" as a required convention for every case, not a detail specific to
+`B01`. Closing the gap for real needs an approach that does not depend on the
+end state at all — grading against a copy the agent's code never runs in, or a
+workspace the agent's code cannot write to — which is a design change for a
+later stage, not a change to this guard. The residue here is a deliberate,
+timing-dependent attack by an agent written to defeat a known grader, not a risk
+an ordinary or even a badly-behaved agent poses by accident.
 
 ## Proving the Oracles
 
