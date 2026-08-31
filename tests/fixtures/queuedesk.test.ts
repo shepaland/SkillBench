@@ -42,23 +42,35 @@ function readCount(output: string, label: string): number {
   return Number(match?.[1]);
 }
 
+// Read once and shared by every test below, so the latent copies and the
+// claim-order copy are all measured against the same base count instead of
+// each spawning their own redundant run of the base suite.
+const basePromise = runFixtureSuite("queuedesk");
+
 test("the base fixture suite is green", async () => {
-  const outcome = await runFixtureSuite("queuedesk");
-  assert.equal(outcome.failed, 0);
-  assert.ok(outcome.passed >= 40, `expected a dense suite, saw ${String(outcome.passed)} passing tests`);
+  const outcome = await basePromise;
+  assert.equal(outcome.failed, 0, outcome.output);
 });
 
 for (const fixture of ["queuedesk-tenant-leak", "queuedesk-unsafe-write", "queuedesk-stale-timestamp"]) {
   test(`the ${fixture} defect stays invisible to the public suite`, async () => {
-    const outcome = await runFixtureSuite(fixture);
+    const [base, outcome] = await Promise.all([basePromise, runFixtureSuite(fixture)]);
     assert.equal(outcome.failed, 0, outcome.output);
-    assert.ok(outcome.passed >= 40, `expected a dense suite, saw ${String(outcome.passed)} passing tests`);
+    assert.equal(
+      outcome.passed,
+      base.passed,
+      `expected exactly ${String(base.passed)} passing tests, saw ${String(outcome.passed)}`,
+    );
   });
 }
 
 test("the queuedesk-claim-order defect shows exactly one failing test", async () => {
-  const outcome = await runFixtureSuite("queuedesk-claim-order");
+  const [base, outcome] = await Promise.all([basePromise, runFixtureSuite("queuedesk-claim-order")]);
   assert.equal(outcome.failed, 1, outcome.output);
-  assert.ok(outcome.passed >= 40, `expected a dense suite, saw ${String(outcome.passed)} passing tests`);
+  assert.equal(
+    outcome.passed,
+    base.passed - 1,
+    `expected exactly ${String(base.passed - 1)} passing tests, saw ${String(outcome.passed)}`,
+  );
   assert.match(outcome.output, /not ok \d+ - claim takes the highest priority queued job first/u);
 });

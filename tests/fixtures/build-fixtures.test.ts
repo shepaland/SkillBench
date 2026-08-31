@@ -185,6 +185,39 @@ test("rejects a removal that names no file in the base", async () => {
   assert.match(outcome.stderr, /src\/absent\.js/u);
 });
 
+test("rejects an overlay that adds a file under tests/", async () => {
+  const root = await createRoot();
+  await createOverlay(
+    root,
+    "test-tamper",
+    { baseFixture: "base", target: "base-test-tamper", description: "Adds a test.", removals: [] },
+    { "tests/extra.test.js": "export {};\n" },
+  );
+  const outcome = await build(root);
+  assert.equal(outcome.code, 1);
+  assert.match(outcome.stderr, /public test suite/u);
+});
+
+test("rejects an overlay that removes a file under tests/", async () => {
+  const root = await createRoot();
+  await mkdir(join(root, "fixtures/base/tests"), { recursive: true });
+  await writeFile(join(root, "fixtures/base/tests/guard.test.js"), "export {};\n");
+  await createOverlay(
+    root,
+    "test-removal",
+    {
+      baseFixture: "base",
+      target: "base-test-removal",
+      description: "Removes a test.",
+      removals: ["tests/guard.test.js"],
+    },
+    { "src/index.js": "export const value = 2;\n" },
+  );
+  const outcome = await build(root);
+  assert.equal(outcome.code, 1);
+  assert.match(outcome.stderr, /public test suite/u);
+});
+
 test("passes in both modes when fixtures has no overlays directory", async () => {
   const root = await createRoot();
   assert.equal((await build(root)).code, 0);

@@ -115,6 +115,7 @@ async function compose(root, overlay) {
     throw new Error(`overlay ${overlay.name} has no files directory`);
   }
   await assertNoSymbolicLinks(files, `overlay ${overlay.name}`);
+  await assertDoesNotTouchTests(overlay, files);
 
   const staging = await mkdtemp(join(tmpdir(), "skillbench-compose-"));
   try {
@@ -172,6 +173,34 @@ async function listFiles(root, prefix = "", collected = new Map()) {
       continue;
     }
     collected.set(relativePath, await readFile(join(root, relativePath)));
+  }
+  return collected;
+}
+
+async function assertDoesNotTouchTests(overlay, files) {
+  for (const removal of overlay.removals) {
+    if (removal === "tests" || removal.startsWith(`tests${sep}`) || removal.startsWith("tests/")) {
+      throw new Error(
+        `overlay ${overlay.name}: the public test suite may not be modified by an overlay: ${removal}`,
+      );
+    }
+  }
+  for (const relativePath of await listRelativePaths(files)) {
+    if (relativePath === "tests" || relativePath.startsWith("tests/")) {
+      throw new Error(
+        `overlay ${overlay.name}: the public test suite may not be modified by an overlay: ${relativePath}`,
+      );
+    }
+  }
+}
+
+async function listRelativePaths(root, prefix = "", collected = []) {
+  for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
+    const relativePath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+    collected.push(relativePath);
+    if (entry.isDirectory()) {
+      await listRelativePaths(root, relativePath, collected);
+    }
   }
   return collected;
 }
