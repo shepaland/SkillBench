@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const fixtureRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-export const cliPath = join(fixtureRoot, "src", "cli.js");
+const projectRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+export const cliPath = join(projectRoot, "src", "cli.js");
 
 export function job(overrides) {
   return {
