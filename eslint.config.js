@@ -3,7 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/", "coverage/", ".private/", "runs/"],
+    ignores: ["dist/", "coverage/", ".private/", "runs/", "fixtures/queuedesk-*/"],
   },
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
@@ -22,7 +22,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/**/*.mjs", "fixtures/**/*.js"],
+    files: ["scripts/**/*.mjs", "fixtures/queuedesk/**/*.js", "fixtures/overlays/**/files/**/*.js"],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
       ecmaVersion: 2023,
