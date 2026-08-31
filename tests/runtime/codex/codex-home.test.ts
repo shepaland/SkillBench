@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { DependencyError } from "../../../src/domain/errors.js";
 import { CodexHome } from "../../../src/runtime/codex/codex-home.js";
+import { extractVersion } from "../../../src/runtime/codex/codex-version.js";
 
 async function sourceHomeWithCredentials(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "codex-source-"));
@@ -34,4 +35,25 @@ test("cleanup is safe to call twice", async () => {
   const home = await CodexHome.create({ sourceHome });
   await home.cleanup();
   await home.cleanup();
+});
+
+test("extractVersion yields 0.151.0 from the observed shape codex-cli 0.151.0", () => {
+  const version = extractVersion("codex-cli 0.151.0");
+  assert.equal(version, "0.151.0");
+});
+
+test("extractVersion yields the version token even with trailing metadata", () => {
+  const version = extractVersion("codex-cli 0.151.0 (aarch64-apple-darwin)");
+  assert.equal(version, "0.151.0");
+});
+
+test("extractVersion rejects output with no version-like token and includes the offending output", () => {
+  const output = "codex (aarch64-apple-darwin)";
+  assert.throws(
+    () => extractVersion(output),
+    (err: unknown) => {
+      if (!(err instanceof DependencyError)) return false;
+      return err.message.includes(output);
+    },
+  );
 });
