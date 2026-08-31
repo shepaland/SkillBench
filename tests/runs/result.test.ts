@@ -71,7 +71,9 @@ test("writes transcript, changes, and result as separate records", async () => {
       exitCode: 0,
       durationMs: 5,
       detail: "",
+      source: "oracle",
     }],
+    transcriptRuleOutcomes: [],
     changes: { added: [], modified: ["src/index.js"], removed: [] },
     changePathObservations: { outsideAllowed: [], insideForbidden: [] },
     costs: { inputTokens: 10, outputTokens: 20, wallClockMs: 30, unplannedUserTurns: 0 },
@@ -88,7 +90,7 @@ test("writes transcript, changes, and result as separate records", async () => {
     metadata: { runtime: "fake", runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
     exhaustion: null,
     unparsedLines: 0,
-  });
+  }, []);
   await writer.writeChanges(result.changes, result.changePathObservations);
   await writer.writeResult(result);
 
@@ -119,14 +121,16 @@ test("detects a failed critical assertion and ignores a failed non-critical one"
   assert.equal(
     hasFailedCriticalAssertion({
       ...base,
-      assertions: [{ assertionId: "a", dimension: "functional", critical: false, outcome: "failed", exitCode: 1, durationMs: 1, detail: "" }],
+      assertions: [{ assertionId: "a", dimension: "functional", critical: false, outcome: "failed", exitCode: 1, durationMs: 1, detail: "", source: "oracle" }],
+      transcriptRuleOutcomes: [],
     }),
     false,
   );
   assert.equal(
     hasFailedCriticalAssertion({
       ...base,
-      assertions: [{ assertionId: "a", dimension: "functional", critical: true, outcome: "error", exitCode: null, durationMs: 1, detail: "" }],
+      assertions: [{ assertionId: "a", dimension: "functional", critical: true, outcome: "error", exitCode: null, durationMs: 1, detail: "", source: "oracle" }],
+      transcriptRuleOutcomes: [],
     }),
     true,
   );

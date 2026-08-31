@@ -1,8 +1,8 @@
 import type { CatalogCase, CatalogVariant } from "../catalog/load-catalog.js";
 import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
-import type { RuntimeLimits } from "../domain/model.js";
+import type { AssertionDeclaration, TranscriptRule } from "../domain/model.js";
 import { hashTree } from "../integrity/content-hash.js";
-import type { RuntimeAdapter, RuntimeExecution, TranscriptEvent } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapter, RuntimeExecution } from "../runtime/runtime-adapter.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
 import { loadOracleManifest } from "../oracles/oracle-manifest.js";
 import { runOracle, type AssertionResult } from "../oracles/run-oracle.js";
@@ -21,6 +21,7 @@ import {
   type ChangeSet,
   type TreeSnapshot,
 } from "./snapshot.js";
+import { evaluateRules, type TranscriptRuleOutcome } from "./transcript-rules.js";
 
 export interface ExecuteRunInput {
   readonly paths: ProjectPaths;
@@ -70,6 +71,11 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   let failureMessage = "";
   let preservedWorkspacePath: string | null = null;
   const cleanupFailures: string[] = [];
+  const ruleOutcomes: TranscriptRuleOutcome[] = [];
+  const rules: readonly TranscriptRule[] = input.catalogCase.manifest.transcriptRules ?? [];
+  const gatedRuleIds = new Set(
+    input.catalogCase.manifest.promptSteps.flatMap((step) => [...(step.continuation?.eventRuleIds ?? [])]),
+  );
 
   try {
     workspace = await materializeWorkspace({
@@ -88,13 +94,15 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     step = "baseline_snapshot";
     baseline = await snapshotTree(workspace.workspacePath);
 
-    step = "execute";
+    step = "oracle_setup";
     lifecycle = await OracleLifecycle.create({
       paths: input.paths,
       caseId: input.catalogCase.manifest.id,
       workspacePath: workspace.workspacePath,
       ...(input.tempParent === undefined ? {} : { tempParent: input.tempParent }),
     });
+
+    step = "execute";
     execution = await input.adapter.execute({
       workspace: workspace.workspacePath,
       promptSteps: input.catalogCase.manifest.promptSteps,
@@ -105,9 +113,14 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
         limits: input.catalogCase.manifest.limits,
         environment: input.variant.manifest.environment,
       },
-      onContinuation: async () => {},
+      onContinuation: (continuedStep, events) => {
+        const gated = rules.filter((rule) => (continuedStep.continuation?.eventRuleIds ?? []).includes(rule.id));
+        ruleOutcomes.push(...evaluateRules(gated, events));
+        return Promise.resolve();
+      },
     });
-    await writer.writeTranscript(execution);
+    ruleOutcomes.push(...evaluateRules(rules.filter((rule) => !gatedRuleIds.has(rule.id)), execution.events));
+    await writer.writeTranscript(execution, ruleOutcomes);
 
     step = "final_snapshot";
     changes = diffSnapshots(baseline, await snapshotTree(workspace.workspacePath));
@@ -129,17 +142,20 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       );
     }
     const oracleManifest = await loadOracleManifest(mounted.gradingPath, input.validator);
-    assertions = await runOracle({
+    const oracleResults = await runOracle({
       manifest: oracleManifest,
-      assertions: input.catalogCase.manifest.assertions,
+      assertions: input.catalogCase.manifest.assertions.filter(
+        ({ transcriptRuleId }) => transcriptRuleId === undefined,
+      ),
       gradingPath: mounted.gradingPath,
       workspacePath: workspace.workspacePath,
     });
+    assertions = mergeAssertions(input.catalogCase.manifest.assertions, oracleResults, ruleOutcomes);
 
     step = "verify_fixture";
     await workspace.verifySource();
 
-    status = isExhausted(execution, input.catalogCase.manifest.limits) ? "exhausted" : "completed";
+    status = execution.exhaustion === null ? "completed" : "exhausted";
   } catch (error: unknown) {
     status = "errored";
     failedStep = step;
@@ -163,6 +179,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     failedStep,
     failureMessage,
     assertions,
+    transcriptRuleOutcomes: Object.freeze([...ruleOutcomes]),
     changes,
     changePathObservations: observations,
     costs: Object.freeze({
@@ -184,25 +201,35 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
   return result;
 }
 
-function isExhausted(execution: RuntimeExecution, limits: RuntimeLimits): boolean {
-  if (execution.process.timedOut) return true;
-  if (execution.process.signal !== null) return true;
-  if (execution.elapsedMs >= limits.wallClockMs) return true;
-  if (execution.usage !== null &&
-    execution.usage.inputTokens + execution.usage.outputTokens >= limits.tokenLimit) {
-    return true;
-  }
-  return outputBytes(execution.events) >= limits.outputBytes;
-}
+function mergeAssertions(
+  declarations: readonly AssertionDeclaration[],
+  oracleResults: readonly AssertionResult[],
+  outcomes: readonly TranscriptRuleOutcome[],
+): readonly AssertionResult[] {
+  const oracleById = new Map(oracleResults.map((result) => [result.assertionId, result]));
+  const outcomeById = new Map(outcomes.map((outcome) => [outcome.ruleId, outcome]));
 
-function outputBytes(events: readonly TranscriptEvent[]): number {
-  let total = 0;
-  for (const event of events) {
-    if (event.type === "assistant_message" || event.type === "completion_claim") {
-      total += Buffer.byteLength(event.text, "utf8");
+  return Object.freeze(declarations.map((declaration) => {
+    if (declaration.transcriptRuleId === undefined) {
+      const result = oracleById.get(declaration.id);
+      if (result === undefined) {
+        throw new Error(`assertion ${declaration.id} has no oracle result after coverage validation`);
+      }
+      return result;
     }
-  }
-  return total;
+
+    const outcome = outcomeById.get(declaration.transcriptRuleId);
+    return Object.freeze({
+      assertionId: declaration.id,
+      dimension: declaration.dimension,
+      critical: declaration.critical,
+      outcome: outcome === undefined ? "error" : outcome.satisfied ? "passed" : "failed",
+      exitCode: null,
+      durationMs: 0,
+      detail: outcome?.detail ?? `transcript rule ${declaration.transcriptRuleId} was never evaluated`,
+      source: "transcript",
+    } as const);
+  }));
 }
 
 function countUnplannedUserTurns(

@@ -4,6 +4,7 @@ import type { RuntimeExecution } from "../runtime/runtime-adapter.js";
 import type { ImmutableJsonStore } from "../storage/immutable-json-store.js";
 import { runDirectory } from "./freeze-inputs.js";
 import type { ChangePathObservations, ChangeSet } from "./snapshot.js";
+import type { TranscriptRuleOutcome } from "./transcript-rules.js";
 
 export type RunStatus = "completed" | "exhausted" | "errored";
 
@@ -11,6 +12,7 @@ export type PipelineStep =
   | "materialize"
   | "install"
   | "baseline_snapshot"
+  | "oracle_setup"
   | "execute"
   | "final_snapshot"
   | "grade"
@@ -31,6 +33,7 @@ export interface RunResult {
   readonly failedStep: PipelineStep | null;
   readonly failureMessage: string;
   readonly assertions: readonly AssertionResult[];
+  readonly transcriptRuleOutcomes: readonly TranscriptRuleOutcome[];
   readonly changes: ChangeSet;
   readonly changePathObservations: ChangePathObservations;
   readonly costs: RunCosts;
@@ -57,7 +60,10 @@ export class RunEvidenceWriter {
     await this.store.write(`${this.directory}/manifest.json`, this.manifest);
   }
 
-  public async writeTranscript(execution: RuntimeExecution): Promise<void> {
+  public async writeTranscript(
+    execution: RuntimeExecution,
+    ruleOutcomes: readonly TranscriptRuleOutcome[],
+  ): Promise<void> {
     await this.store.write(`${this.directory}/transcript.json`, {
       schemaVersion: 1,
       runId: this.manifest.runId,
@@ -65,6 +71,9 @@ export class RunEvidenceWriter {
       process: execution.process,
       usage: execution.usage,
       elapsedMs: execution.elapsedMs,
+      exhaustion: execution.exhaustion,
+      unparsedLines: execution.unparsedLines,
+      transcriptRuleOutcomes: ruleOutcomes,
       metadata: execution.metadata,
     });
   }

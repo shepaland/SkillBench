@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { loadCatalog, type CatalogCase, type CatalogVariant } from "../../src/catalog/load-catalog.js";
+import type { AssertionDeclaration, CaseManifest, PromptStep, TranscriptRule } from "../../src/domain/model.js";
+import { oracleFileSystem } from "../../src/oracles/oracle-lifecycle.js";
 import { ProjectPaths } from "../../src/paths/project-paths.js";
 import { executeRun, type ExecuteRunInput } from "../../src/runs/execute-run.js";
-import type { RunConfiguration } from "../../src/runs/freeze-inputs.js";
+import { createRunId, defaultRunIdSuffix, runDirectory, type RunConfiguration } from "../../src/runs/freeze-inputs.js";
+import type { RunResult } from "../../src/runs/result.js";
 import { ManifestValidator } from "../../src/schemas/validator.js";
-import type { RuntimeAdapter, RuntimeExecution } from "../../src/runtime/runtime-adapter.js";
+import { FakeAdapter, type FakeScript, type FakeScriptStep } from "../../src/runtime/fake-adapter.js";
+import type { ExhaustionCause, RuntimeAdapter, RuntimeExecution, TranscriptEvent } from "../../src/runtime/runtime-adapter.js";
 import { selectAdapter } from "../../src/runtime/select-adapter.js";
 import { ImmutableJsonStore } from "../../src/storage/immutable-json-store.js";
-import { createTempProject, type TempProject } from "../helpers/temp-project.js";
+import { createTempProject, writeJson, type TempProject } from "../helpers/temp-project.js";
 
 const configuration: RunConfiguration = {
   runtime: "fake",
@@ -154,6 +158,7 @@ test("an exhausted adapter reports exhausted and still grades", async () => {
       ...closedSession,
       process: { exitCode: null, signal: "SIGKILL", timedOut: true },
       usage: { inputTokens: 1, outputTokens: 1 },
+      exhaustion: "wall_clock",
     }),
   };
 
@@ -170,6 +175,7 @@ test("a process killed by a signal reports exhausted even without a timeout flag
       ...closedSession,
       process: { exitCode: null, signal: "SIGKILL", timedOut: false },
       usage: { inputTokens: 1, outputTokens: 1 },
+      exhaustion: "signal",
     }),
   };
 
@@ -337,6 +343,64 @@ test("a workspace preserved by keepWorkspace carries no private oracle content",
   await rm(dirname(workspacePath), { recursive: true, force: true });
 });
 
+test("grades a transcript assertion at the continuation point and proceeds anyway", async () => {
+  // Case: step s1 declares continuation rule "stopped" (no_file_change);
+  // assertion A2 is graded from it; the fake script edits a file during s1.
+  const result = await runWithScript({
+    transcriptRules: [{ id: "stopped", check: "no_file_change" }],
+    assertions: [
+      { id: "A1", dimension: "functional", critical: true },
+      { id: "A2", dimension: "process", critical: false, transcriptRuleId: "stopped" },
+    ],
+    promptSteps: [
+      { id: "s1", prompt: "ask first", continuation: { eventRuleIds: ["stopped"] } },
+      { id: "s2", prompt: "now do it" },
+    ],
+    scriptSteps: [
+      { stepId: "s1", events: [{ type: "file_change", afterMs: 1, paths: ["src/a.js"], outsidePaths: [] }] },
+      { stepId: "s2", events: [] },
+    ],
+  });
+
+  const graded = result.assertions.find((assertion) => assertion.assertionId === "A2");
+  assert.equal(graded?.outcome, "failed");
+  assert.equal(graded.source, "transcript");
+  assert.equal(result.assertions.find((assertion) => assertion.assertionId === "A1")?.source, "oracle");
+  assert.equal(result.transcriptRuleOutcomes.length, 1);
+  // The violation does not stop the run: both declared steps were sent.
+  assert.equal(result.events.filter((event) => event.type === "prompt_sent").length, 2);
+});
+
+test("evaluates an unreferenced rule after the session closes", async () => {
+  const result = await runWithScript({
+    transcriptRules: [{ id: "spoke", check: "assistant_message" }],
+    assertions: [{ id: "A1", dimension: "functional", critical: true }],
+    promptSteps: [{ id: "s1", prompt: "go" }],
+    scriptSteps: [{ stepId: "s1", events: [{ type: "assistant_message", afterMs: 1, text: "hi" }] }],
+  });
+
+  assert.deepEqual(
+    result.transcriptRuleOutcomes.map((outcome) => [outcome.ruleId, outcome.satisfied]),
+    [["spoke", true]],
+  );
+});
+
+test("reads the exhaustion cause from the adapter instead of guessing", async () => {
+  const result = await runWithScript({ exhaustion: "wall_clock" });
+  assert.equal(result.status, "exhausted");
+
+  const finished = await runWithScript({ exhaustion: null, usage: { inputTokens: 5000, outputTokens: 5000 } });
+  assert.equal(finished.status, "completed");
+});
+
+test("attributes an oracle lifecycle fault to the oracle_setup step", async () => {
+  // OracleLifecycle.create runs before the adapter is ever invoked; a failure there
+  // must be attributed to oracle_setup, not execute.
+  const result = await runWithFailingOracleLifecycle();
+  assert.equal(result.status, "errored");
+  assert.equal(result.failedStep, "oracle_setup");
+});
+
 function fixtureMutatingAdapter(harness: Harness): RuntimeAdapter {
   return {
     execute: async () => {
@@ -344,6 +408,109 @@ function fixtureMutatingAdapter(harness: Harness): RuntimeAdapter {
       return closedSession;
     },
   };
+}
+
+interface ScriptCase {
+  readonly transcriptRules?: readonly TranscriptRule[];
+  readonly assertions?: readonly AssertionDeclaration[];
+  readonly promptSteps?: readonly PromptStep[];
+  readonly scriptSteps?: readonly FakeScriptStep[];
+  readonly exhaustion?: ExhaustionCause | null;
+  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number } | null;
+}
+
+/**
+ * Assembles a temporary project whose case manifest is built from the given fields
+ * (falling back to the default case's fixture, limits, and change paths), runs it
+ * through a FakeAdapter driven by `scriptSteps`, and returns the written result
+ * together with the events recorded in transcript.json.
+ */
+async function runWithScript(script: ScriptCase): Promise<RunResult & { readonly events: readonly TranscriptEvent[] }> {
+  const harness = await createHarness(async (project) => {
+    if (script.assertions !== undefined) {
+      await writeOracleForAssertions(project, script.assertions);
+    }
+    if (script.promptSteps !== undefined || script.transcriptRules !== undefined || script.assertions !== undefined) {
+      const manifest: CaseManifest = {
+        ...project.caseManifest,
+        ...(script.promptSteps === undefined ? {} : { promptSteps: script.promptSteps }),
+        ...(script.transcriptRules === undefined ? {} : { transcriptRules: script.transcriptRules }),
+        ...(script.assertions === undefined ? {} : { assertions: script.assertions }),
+      };
+      await writeJson(project.caseManifestPath, manifest);
+    }
+  });
+
+  const scriptSteps = script.scriptSteps ??
+    harness.catalogCase.manifest.promptSteps.map((step) => ({ stepId: step.id, events: [] }));
+  const fakeScript: FakeScript = {
+    steps: scriptSteps,
+    closeAfterMs: 5,
+    process: { exitCode: 0, signal: null, timedOut: false },
+    usage: script.usage === undefined ? { inputTokens: 100, outputTokens: 100 } : script.usage,
+    metadata: { runtimeVersion: "1.0.0", adapterVersion: "1.0.0" },
+    exhaustion: script.exhaustion ?? null,
+  };
+  const adapter = new FakeAdapter(fakeScript);
+
+  const runId = createRunId(new Date(), defaultRunIdSuffix());
+  const result = await executeRun(runInput(harness, runId, { adapter }));
+
+  const transcript = JSON.parse(
+    await readFile(join(harness.project.root, runDirectory(result.manifest), "transcript.json"), "utf8"),
+  ) as { readonly events: readonly TranscriptEvent[] };
+
+  return { ...result, events: transcript.events };
+}
+
+/**
+ * Forces OracleLifecycle.create to fail by breaking the shared oracleFileSystem
+ * testing seam it defaults to. materializeWorkspace never touches this object (it
+ * has its own file system with no realpath), so materialize/install/baseline_snapshot
+ * stay green and the failure surfaces only once the pipeline reaches oracle_setup.
+ * OracleLifecycle.create resolves the workspace path first and its temp parent
+ * second, so only the second call is made to fail.
+ */
+async function runWithFailingOracleLifecycle(): Promise<RunResult> {
+  const harness = await createHarness();
+  const originalRealpath = oracleFileSystem.realpath.bind(oracleFileSystem);
+  let realpathCalls = 0;
+  oracleFileSystem.realpath = async (path: string): Promise<string> => {
+    realpathCalls += 1;
+    if (realpathCalls === 2) {
+      throw new Error("private oracle temporary parent is unavailable");
+    }
+    return originalRealpath(path);
+  };
+  try {
+    const runId = createRunId(new Date(), defaultRunIdSuffix());
+    return await executeRun(runInput(harness, runId));
+  } finally {
+    oracleFileSystem.realpath = originalRealpath;
+  }
+}
+
+async function writeOracleForAssertions(
+  project: TempProject,
+  assertions: readonly AssertionDeclaration[],
+): Promise<void> {
+  const oracleGraded = assertions.filter((assertion) => assertion.transcriptRuleId === undefined);
+  const checksDirectory = join(project.oracleDirectory, "checks");
+  await rm(checksDirectory, { recursive: true, force: true });
+  await mkdir(checksDirectory, { recursive: true });
+  for (const assertion of oracleGraded) {
+    await writeFile(join(checksDirectory, `${assertion.id}.js`), "process.exit(0);\n");
+  }
+  await writeJson(project.oracleManifestPath, {
+    schemaVersion: 1,
+    caseId: "F01",
+    checks: oracleGraded.map((assertion) => ({
+      assertionId: assertion.id,
+      command: { executor: "node", args: [`${assertion.id}.js`] },
+      workingDirectory: "checks",
+      timeoutMs: 10_000,
+    })),
+  });
 }
 
 async function oracleLeftovers(tempParent: string): Promise<string[]> {

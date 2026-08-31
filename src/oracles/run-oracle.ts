@@ -13,6 +13,7 @@ export interface AssertionResult {
   readonly exitCode: number | null;
   readonly durationMs: number;
   readonly detail: string;
+  readonly source: "oracle" | "transcript";
 }
 
 export interface OracleSpawnRequest {
@@ -144,6 +145,7 @@ function build(
     exitCode,
     durationMs,
     detail: truncate(detail),
+    source: "oracle",
   });
 }
 
