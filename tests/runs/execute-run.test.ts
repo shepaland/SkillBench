@@ -233,6 +233,41 @@ test("exhaustion takes precedence over a non-zero exit code", async () => {
   assert.equal(result.status, "exhausted");
 });
 
+test("a raw line delivered through onRawLine reaches its evidence file", async () => {
+  const harness = await createHarness();
+  const rawLineAdapter: RuntimeAdapter = {
+    execute: (input) => {
+      input.onRawLine?.("s1", '{"event":"raw"}');
+      return Promise.resolve(closedSession);
+    },
+  };
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2ce", { adapter: rawLineAdapter }));
+
+  assert.equal(result.status, "completed");
+  const directory = join(harness.project.root, "runs/F01/example/20260830T175302Z-a1b2ce");
+  const written = await readFile(join(directory, "raw/step-s1.jsonl"), "utf8");
+  assert.equal(written, '{"event":"raw"}\n');
+});
+
+test("a raw write failure is recorded in cleanupFailures without changing the run outcome", async () => {
+  const harness = await createHarness();
+  // A NUL byte makes ProjectPaths#resolveOutput reject the path inside appendRawLine's
+  // queued write, without touching filesystem permissions.
+  const badRawLineAdapter: RuntimeAdapter = {
+    execute: (input) => {
+      input.onRawLine?.("s1\0bad", '{"event":"raw"}');
+      return Promise.resolve(closedSession);
+    },
+  };
+
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2cf", { adapter: badRawLineAdapter }));
+
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.assertions.map((assertion) => assertion.outcome), ["passed"]);
+  assert.ok(result.cleanupFailures.some((failure) => failure.startsWith("raw evidence:")));
+});
+
 test("an adapter failure reports errored at the execute step", async () => {
   const harness = await createHarness();
   const brokenAdapter: RuntimeAdapter = {

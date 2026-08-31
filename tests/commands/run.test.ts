@@ -60,6 +60,7 @@ test("a run against the fake runtime writes no raw/ directory", async () => {
   await runRun(options(project.root), io, () => new Date("2026-08-30T17:53:02.000Z"), sequentialSuffixes());
 
   const runDirectories = await readdir(join(project.root, "runs/F01/example"));
+  assert.equal(runDirectories.length, 1);
   const runDirectory = join(project.root, "runs/F01/example", runDirectories[0] ?? "");
   const entries = await readdir(runDirectory);
   assert.ok(!entries.includes("raw"));

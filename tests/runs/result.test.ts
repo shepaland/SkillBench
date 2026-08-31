@@ -54,16 +54,22 @@ test("writing the same manifest twice is idempotent", async () => {
   await writer.writeManifest();
 });
 
-test("appendRawLine writes lines in order and flushRawLines reports no failures", async () => {
+test("appendRawLine serializes many rapid calls into one ordered file and flushRawLines reports no failures", async () => {
   const { project, writer } = await createWriter();
 
-  writer.appendRawLine("s1", '{"line":1}');
-  writer.appendRawLine("s1", '{"line":2}');
+  const lineCount = 50;
+  const lines = Array.from({ length: lineCount }, (_, index) => `{"line":${index.toString()}}`);
+  // Fired without awaiting between calls, so every write races to append before the
+  // previous one has necessarily settled. Without the internal promise-queue
+  // serialization, concurrent appendFile calls could interleave or drop lines.
+  for (const line of lines) {
+    writer.appendRawLine("s1", line);
+  }
   const failures = await writer.flushRawLines();
 
   assert.deepEqual(failures, []);
   const written = await readFile(join(project.root, writer.directory, "raw/step-s1.jsonl"), "utf8");
-  assert.equal(written, '{"line":1}\n{"line":2}\n');
+  assert.equal(written, `${lines.join("\n")}\n`);
 });
 
 test("writes transcript, changes, and result as separate records", async () => {
