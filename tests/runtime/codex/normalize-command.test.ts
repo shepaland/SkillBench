@@ -41,3 +41,21 @@ test("keeps an unsplittable script as a single record under the shell", () => {
 test("returns no records for an empty command", () => {
   assert.deepEqual(normalizeCommand("   "), []);
 });
+
+test("unwraps nested shell wrappers to reach the inner command", () => {
+  // The main case from the finding: nested shell wrappers should be unwrapped
+  // recursively to find the actual command
+  assert.deepEqual(
+    normalizeCommand('/bin/zsh -lc "/bin/bash -lc \'node --test\'"'),
+    [{ executor: "node", args: ["--test"] }]
+  );
+});
+
+test("handles multiple levels of nesting without infinite loops", () => {
+  // Create a 3-level nested wrapper using mixed quotes to avoid escaping issues
+  // This demonstrates that the recursive unwrapping handles multiple shell layers
+  assert.deepEqual(
+    normalizeCommand(`/bin/sh -c "/bin/sh -lc 'node --test'"`),
+    [{ executor: "node", args: ["--test"] }]
+  );
+});

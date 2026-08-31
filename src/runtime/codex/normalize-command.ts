@@ -21,10 +21,30 @@ export function normalizeCommand(command: string): readonly CommandRecord[] {
 
   const records: CommandRecord[] = [];
   for (const segment of script.split(/&&|\|\||;|\||\n/u)) {
-    const built = record(tokenize(segment));
-    if (built !== undefined) records.push(built);
+    records.push(...processSegmentRecursive(segment, 0));
   }
   return Object.freeze(records);
+}
+
+function processSegmentRecursive(segment: string, depth: number): readonly CommandRecord[] {
+  const maxDepth = 4;
+  const tokens = tokenize(segment);
+
+  if (tokens.length === 0) return [];
+
+  const script = unwrapShell(tokens);
+  if (script !== undefined && depth < maxDepth) {
+    // Recursively unwrap and process the script
+    const results: CommandRecord[] = [];
+    for (const subsegment of script.split(/&&|\|\||;|\||\n/u)) {
+      results.push(...processSegmentRecursive(subsegment, depth + 1));
+    }
+    return results;
+  }
+
+  // Not a shell wrapper or depth cap reached, create record
+  const rec = record(tokens);
+  return rec !== undefined ? [rec] : [];
 }
 
 function unwrapShell(tokens: readonly string[]): string | undefined {
