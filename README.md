@@ -66,6 +66,30 @@ The command prints every problem in a stable order. This makes local results and
 
 QueueDesk is a small offline job queue: a command-line tool that lets a team create, list, claim, and complete jobs by reading and writing one local JSON file, with no server and no external dependencies. `fixtures/queuedesk/` is the base project — the clean, working copy that agents will work on once benchmark cases point at it. `fixtures/queuedesk-<name>/` are composed copies, each carrying one seeded defect that a case is built around. These composed copies are built by `npm run fixtures:build` and their match against what that command would produce is checked by `npm run fixtures:check`; a composed copy is never edited by hand.
 
+### Cases and oracles
+
+A case is one programming task that the benchmark gives to every variant. Its manifest, `cases/<case-id>/case.json`, names the fixture to copy, the prompt the agent receives, the limits it works under, the paths it is allowed to change, and the list of assertions that decide whether the work counts as solved. This repository ships one case, `B01`: `queuedesk claim` hands back the oldest queued job instead of the highest-priority one, and the agent is asked to fix the cause rather than the failing test.
+
+An assertion is one automated check with a name and a dimension such as `functional`, `regression`, or `scope`. A critical assertion decides the result: if one of them fails, the run is unsolved. A non-critical assertion only reports something about the work without deciding it. `B01` declares five assertions — three functional, one regression, and one scope — and four of them are critical.
+
+An oracle is the code that decides those assertions. Oracles are deliberately kept out of this repository. A case measures a skill honestly only while the agent cannot read the answer, and the checks are the answer: they say exactly which behavior is expected and which files must stay untouched. Publishing them would make the measurement meaningless.
+
+So the oracles live in a separate private repository, cloned into `.private/` next to this one. `.private/sources/` holds the checks a person writes, and `.private/oracles/<case-id>/` holds the composed copies that SkillBench mounts when it grades a run. A composed oracle is produced by `npm --prefix .private run build` and is never edited by hand — the same rule the composed fixtures follow.
+
+Without the private repository, most of this project still works:
+
+- `node dist/src/cli.js validate --project . --public-only` checks the whole public catalog;
+- `list` and `dry-run` work normally;
+- the fixtures under `fixtures/` and their public test suites run as usual;
+- `npm run check` passes, because it never touches private material.
+
+Grading is what needs the private repository: `validate` without `--public-only`, `run`, and these two commands.
+
+| Command | What it does |
+| --- | --- |
+| `npm run oracles:proof` | Composes a correct and a deliberately broken copy of each case's project and grades both, proving that every assertion the oracle grades can really pass and really fail. |
+| `npm --prefix .private run check` | Checks that the composed oracles still match their sources and runs the private repository's own tests. |
+
 ### `list`, `dry-run`, and `run`
 
 `list` prints the cases and variants defined in a project. Add `--json` to get the same information as a JSON document for scripts.
@@ -126,7 +150,7 @@ An assertion in a case can carry `transcriptRuleId` instead of being graded by t
 SKILLBENCH_LIVE=1 npm run smoke:codex
 ```
 
-This check proves that one small task runs correctly against the real adapter. It does not exercise the public benchmark suite, because there are no public cases yet.
+This check proves that one small task runs correctly against the real adapter. It uses its own tiny fixture and does not run the benchmark cases.
 
 ### Run evidence
 
@@ -151,7 +175,7 @@ Each run writes its evidence under `runs/<case-id>/<variant-id>/<run-id>/`:
 
 ### Private oracle manifest
 
-Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the case's declared assertions that do *not* carry a `transcriptRuleId` — those are graded by SkillBench itself, from a transcript rule, and must not also appear in the oracle. No covered assertion is left without a check, no check names an assertion the case does not declare, and no two checks name the same assertion.
+Each case's private grading checks live in `.private/oracles/<case-id>/oracle.json`, composed from `.private/sources/<case-id>/` by `npm --prefix .private run build`. Its JSON structure is published as `schemas/oracle.schema.json`, so anyone can see the required shape without reading the private content itself. Every check in the manifest maps one declared assertion to one typed command, together with the working directory to run it in and a timeout in milliseconds. Unless `--public-only` is used, `validate` loads this manifest and confirms it covers exactly the case's declared assertions that do *not* carry a `transcriptRuleId` — those are graded by SkillBench itself, from a transcript rule, and must not also appear in the oracle. No covered assertion is left without a check, no check names an assertion the case does not declare, and no two checks name the same assertion.
 
 ### Requirements
 
@@ -161,6 +185,7 @@ Each case's private grading checks live in `.private/oracles/<case-id>/oracle.js
 | Package manager | npm, included with Node.js |
 | Network | Needed for the first `npm ci` unless the npm cache already contains every package |
 | Codex command-line tool | Optional. Needed only for `--runtime codex` and for the live smoke check. `dry-run` needs it installed; `run` also needs it logged in. Nothing else in this project uses it, and no automated test starts a session. |
+| Private oracle repository | Optional, and available only to the benchmark's maintainers. Needed for grading: `run`, `validate` without `--public-only`, and `npm run oracles:proof`. Clone it into `.private/`. |
 
 ### Install and build
 
@@ -211,11 +236,13 @@ node dist/src/cli.js validate --project . --public-only
 node dist/src/cli.js validate --project /path/to/benchmark --public-only
 ```
 
-The current repository does not contain public case or variant manifests. A successful public validation therefore prints:
+This repository ships one case and one variant, so a successful validation prints:
 
 ```text
-Validated 0 cases and 0 variants.
+Validated 1 case and 1 variant.
 ```
+
+Both forms print the same line. `--public-only` only skips the private oracle checks; it does not skip anything else. The full form needs the private repository cloned into `.private/`, and reports a missing oracle as a problem when it is not there.
 
 ### Exit codes
 
@@ -257,11 +284,13 @@ Comparisons and Markdown reports are not implemented yet. Those artifacts belong
 - Stream parsing is pinned to the event shapes of one observed Codex version. A different installed version may produce lines SkillBench does not recognize; the run still completes and the raw stream is kept as evidence, but transcript rules may see fewer events. The runtime version is frozen into every run's manifest, so runs from different versions are never compared against each other.
 - Wall-clock and output-byte limits are enforced by sending the runtime a termination signal, then a kill signal after a short grace period; a child that ignores the first signal is stopped only by the second.
 - `validate` checks that each required private oracle directory exists, is not empty, can be hashed, and — unless `--public-only` is used — that its oracle manifest covers exactly the assertions the case declares without a `transcriptRuleId`.
+- A case's `publicVerification` list is frozen into the run's manifest and printed by `dry-run`, but `run` never executes it. The public test suite is really run by the case's regression assertion, from the oracle's own copy of that suite.
+- An oracle check that crashes and an oracle check that cleanly decides the assertion is not met both end with a non-zero exit code, so both are reported as a failed assertion. Only the error output tells the two apart.
 - Case and variant manifests are discovered only one directory below `cases/` and `variants/`.
 - `--public-only` skips private oracle availability checks. All schema, reference, hash, and path checks still run.
 - Catalog paths reject traversal and symbolic links. Another local process can still replace a checked path between validation and later use.
 - Immutable JSON storage protects writes that happen one after another. Two local processes writing the same record at the same time can conflict because the standard `rename` operation on macOS and Linux can replace an existing file.
-- The repository currently provides catalog validation, run orchestration against the fake runtime and against a live Codex session, and test fixtures. The twelve-case public benchmark suite, scoring, comparisons, and reports are planned for later stages.
+- The repository ships one case, `B01`, and one variant, `control`, which uses no extra skill. The skill variants — OpenSpec, Superpowers, and LexForge — do not exist yet, so nothing can be compared. The rest of the twelve-case public suite, scoring, comparisons, and reports are planned for later stages.
 
 ## Русский
 
@@ -327,6 +356,30 @@ SkillBench проверяет данные для тестирования ко�
 
 QueueDesk — небольшая офлайн-очередь задач: утилита командной строки, которая позволяет команде создавать, просматривать, забирать в работу и завершать задачи, читая и записывая один локальный JSON-файл, без сервера и без внешних зависимостей. `fixtures/queuedesk/` — базовый проект, чистая рабочая копия, с которой будут работать агенты, как только кейсы бенчмарка станут на неё ссылаться. `fixtures/queuedesk-<name>/` — собранные копии, в каждой — ровно один намеренный дефект, вокруг которого построен один из кейсов. Эти собранные копии создаёт команда `npm run fixtures:build`, а их соответствие тому, что построила бы эта команда, проверяет `npm run fixtures:check`; собранную копию никогда не редактируют вручную.
 
+### Кейсы и оракулы
+
+Кейс — это одна задача по программированию, которую бенчмарк даёт каждому варианту. Его манифест `cases/<case-id>/case.json` называет фикстуру для копирования, запрос, который получит агент, лимиты его работы, пути, которые ему разрешено менять, и список проверок-утверждений, по которым решают, справился ли он. В репозитории есть один кейс, `B01`: команда `queuedesk claim` выдаёт самую старую задачу из очереди вместо задачи с наивысшим приоритетом, и агента просят исправить причину, а не падающий тест.
+
+Утверждение — это одна автоматическая проверка со своим именем и измерением, например `functional`, `regression` или `scope`. Критическое утверждение решает исход: если хотя бы одно из них не выполнилось, запуск считается нерешённым. Некритическое утверждение только сообщает что-то о работе, но исход не решает. Кейс `B01` заявляет пять утверждений — три функциональных, одно на отсутствие поломок и одно на границы задачи, — и четыре из них критические.
+
+Оракул — это код, который решает эти утверждения. Оракулы намеренно держат вне этого репозитория. Кейс честно измеряет скилл только пока агент не может прочитать ответ, а проверки и есть ответ: они прямо говорят, какое поведение ожидается и какие файлы должны остаться нетронутыми. Публикация проверок сделала бы измерение бессмысленным.
+
+Поэтому оракулы лежат в отдельном закрытом репозитории, который клонируют в каталог `.private/` рядом с этим проектом. В `.private/sources/` лежат проверки, которые пишет человек, а в `.private/oracles/<case-id>/` — собранные копии, которые SkillBench подключает во время оценки запуска. Собранный оракул создаёт команда `npm --prefix .private run build`, и его никогда не редактируют вручную — то же правило действует для собранных фикстур.
+
+Без закрытого репозитория большая часть проекта всё равно работает:
+
+- `node dist/src/cli.js validate --project . --public-only` проверяет весь публичный каталог;
+- `list` и `dry-run` работают как обычно;
+- фикстуры из `fixtures/` и их публичные наборы тестов запускаются как обычно;
+- `npm run check` проходит успешно, потому что он вообще не трогает закрытые материалы.
+
+Закрытый репозиторий нужен для оценки: команде `validate` без флага `--public-only`, команде `run` и этим двум командам.
+
+| Команда | Что делает |
+| --- | --- |
+| `npm run oracles:proof` | Собирает правильную и намеренно сломанную копию проекта каждого кейса и оценивает обе, доказывая, что каждое утверждение, которое проверяет оракул, действительно может выполниться и действительно может не выполниться. |
+| `npm --prefix .private run check` | Проверяет, что собранные оракулы по-прежнему соответствуют своим исходникам, и запускает собственные тесты закрытого репозитория. |
+
 ### `list`, `dry-run` и `run`
 
 `list` выводит список кейсов и вариантов, заданных в проекте. Добавьте `--json`, чтобы получить те же данные в виде JSON-документа для скриптов.
@@ -387,7 +440,7 @@ node dist/src/cli.js run --project . --case <case-id> --variant <variant-id> --k
 SKILLBENCH_LIVE=1 npm run smoke:codex
 ```
 
-Эта проверка доказывает, что одна маленькая задача корректно выполняется на настоящем адаптере. Она не проверяет публичный набор кейсов бенчмарка, потому что публичных кейсов пока нет.
+Эта проверка доказывает, что одна маленькая задача корректно выполняется на настоящем адаптере. Она использует собственную крошечную фикстуру и не запускает кейсы бенчмарка.
 
 ### Свидетельства запуска
 
@@ -412,7 +465,7 @@ SKILLBENCH_LIVE=1 npm run smoke:codex
 
 ### Манифест закрытого оракула
 
-Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те заявленные в кейсе утверждения, у которых НЕТ поля `transcriptRuleId`, — такие утверждения оценивает сам SkillBench по правилу диалога, и они не должны также присутствовать в оракуле. Ни одно покрываемое утверждение не остаётся без проверки, ни одна проверка не называет незаявленное утверждение, и никакие две проверки не называют одно и то же утверждение.
+Закрытые проверки для оценки каждого кейса лежат в `.private/oracles/<case-id>/oracle.json`; их собирает из `.private/sources/<case-id>/` команда `npm --prefix .private run build`. Их структура JSON опубликована как `schemas/oracle.schema.json`, поэтому любой может увидеть требуемую форму, не читая само закрытое содержимое. Каждая проверка в манифесте связывает одно заявленное утверждение с одной типизированной командой, вместе с рабочим каталогом для её запуска и таймаутом в миллисекундах. Если не указан флаг `--public-only`, `validate` загружает этот манифест и проверяет, что он покрывает ровно те заявленные в кейсе утверждения, у которых НЕТ поля `transcriptRuleId`, — такие утверждения оценивает сам SkillBench по правилу диалога, и они не должны также присутствовать в оракуле. Ни одно покрываемое утверждение не остаётся без проверки, ни одна проверка не называет незаявленное утверждение, и никакие две проверки не называют одно и то же утверждение.
 
 ### Требования
 
@@ -422,6 +475,7 @@ SKILLBENCH_LIVE=1 npm run smoke:codex
 | Менеджер пакетов | npm, входит в комплект Node.js |
 | Сеть | Нужна для первого запуска `npm ci`, если в кеше npm нет всех пакетов |
 | Командная утилита Codex | Необязательно. Нужна только для `--runtime codex` и для проверки вживую. Команде `dry-run` достаточно установленной утилиты; команде `run` нужен ещё и выполненный вход. Больше её в проекте ничто не использует, и ни один автоматический тест не запускает сессию. |
+| Закрытый репозиторий оракулов | Необязательно и доступно только тем, кто ведёт бенчмарк. Нужен для оценки: команде `run`, команде `validate` без флага `--public-only` и команде `npm run oracles:proof`. Клонируется в каталог `.private/`. |
 
 ### Установка и сборка
 
@@ -472,11 +526,13 @@ node dist/src/cli.js validate --project . --public-only
 node dist/src/cli.js validate --project /path/to/benchmark --public-only
 ```
 
-Сейчас в репозитории нет публичных манифестов кейсов и вариантов. Успешная публичная проверка выводит:
+В репозитории есть один кейс и один вариант, поэтому успешная проверка выводит:
 
 ```text
-Validated 0 cases and 0 variants.
+Validated 1 case and 1 variant.
 ```
+
+Обе формы команды выводят одну и ту же строку. Флаг `--public-only` отключает только проверки закрытых оракулов и не отключает ничего другого. Полной форме нужен закрытый репозиторий, склонированный в `.private/`; без него она сообщает об отсутствующем оракуле как о проблеме.
 
 ### Коды завершения
 
@@ -518,8 +574,10 @@ Validated 0 cases and 0 variants.
 - Разбор потока данных настроен под форму событий одной наблюдаемой версии Codex. Другая установленная версия может выдать строки, которые SkillBench не распознаёт; запуск всё равно завершится, а исходный поток сохранится как свидетельство, но правила диалога могут увидеть меньше событий. Версия среды выполнения фиксируется в манифесте каждого запуска, поэтому запуски на разных версиях никогда не сравниваются друг с другом.
 - Лимиты по времени и по объёму вывода принудительно останавливаются отправкой среде выполнения сигнала завершения, а затем, после короткой паузы, сигнала принудительного завершения; дочерний процесс, который игнорирует первый сигнал, останавливается только вторым.
 - `validate` проверяет, что нужный каталог закрытого оракула существует, содержит файлы и для него можно рассчитать хеш, а если не указан флаг `--public-only` — что его манифест покрывает ровно те утверждения кейса, у которых нет поля `transcriptRuleId`.
+- Список `publicVerification` из кейса записывается в зафиксированный манифест запуска и печатается командой `dry-run`, но команда `run` его никогда не выполняет. На самом деле публичный набор тестов запускает утверждение кейса об отсутствии поломок — из собственной копии этого набора, которую несёт оракул.
+- Проверка оракула, которая упала с ошибкой, и проверка, которая спокойно решила, что утверждение не выполняется, обе завершаются ненулевым кодом, поэтому обе записываются как проваленное утверждение. Отличить их можно только по выводу ошибок.
 - SkillBench ищет манифесты кейсов и вариантов только на один уровень ниже каталогов `cases/` и `variants/`.
 - Флаг `--public-only` отключает проверку наличия закрытых оракулов. Проверки схем, ссылок, хешей и путей продолжают работать.
 - Пути каталога защищены от перехода в родительские каталоги и символических ссылок. Другая локальная программа всё ещё может заменить уже проверенный путь до его дальнейшего использования.
 - Хранилище неизменяемых JSON-файлов защищает записи, которые идут по очереди. Две локальные программы могут одновременно записывать один файл, потому что стандартная операция `rename` в macOS и Linux заменяет существующий файл.
-- Репозиторий пока содержит проверку каталога, оркестрацию запусков на фиктивной среде выполнения и на настоящей сессии Codex, а также тестовые фикстуры. Набор из двенадцати публичных кейсов, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
+- В репозитории есть один кейс, `B01`, и один вариант, `control`, который не использует дополнительный скилл. Вариантов со скиллами — OpenSpec, Superpowers и LexForge — пока нет, поэтому сравнивать ещё нечего. Остальные кейсы из набора в двенадцать штук, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.

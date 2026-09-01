@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "control",
+  "displayName": "Control",
+  "compatibleRuntimes": ["codex", "fake"],
+  "installs": [],
+  "claimedCategories": [
+    "ambiguous-feature",
+    "architectural-feature",
+    "bounded-feature",
+    "bug-fix",
+    "compatibility",
+    "process",
+    "refactoring",
+    "scope-control",
+    "security"
+  ],
+  "environment": {},
+  "contentHash": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}

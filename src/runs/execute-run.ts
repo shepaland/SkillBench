@@ -129,7 +129,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     await writer.writeTranscript(execution, ruleOutcomes);
 
     step = "final_snapshot";
-    changes = diffSnapshots(baseline, await snapshotTree(workspace.workspacePath));
+    const finalSnapshot = await snapshotTree(workspace.workspacePath);
+    changes = diffSnapshots(baseline, finalSnapshot);
     observations = observeChangePaths(
       changes,
       input.catalogCase.manifest.allowedChangePaths,
@@ -156,6 +157,28 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       gradingPath: mounted.gradingPath,
       workspacePath: workspace.workspacePath,
     });
+    // A check runs code the measured agent wrote, so the grading directory is hashed
+    // again once every check has finished. An oracle that changed during grading may
+    // have graded the agent against material the agent itself supplied, which makes
+    // every assertion of this run worthless, whatever it says.
+    const gradedOracleHash = await hashTree(mounted.gradingPath);
+    if (gradedOracleHash !== manifest.oracleHash) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `private oracle changed while the checks ran: mounted ${gradedOracleHash}, frozen ${manifest.oracleHash}`,
+      );
+    }
+    // A check also runs the agent's code against the workspace, so the workspace is
+    // snapshotted again once every check has finished. The assertions are supposed to
+    // describe the final snapshot; a workspace repaired during grading makes them
+    // describe a tree that no longer exists, whatever they say.
+    const gradedChanges = diffSnapshots(finalSnapshot, await snapshotTree(workspace.workspacePath));
+    if (isChanged(gradedChanges)) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `the workspace changed while the checks ran: ${describeChanges(gradedChanges)}`,
+      );
+    }
     assertions = mergeAssertions(input.catalogCase.manifest.assertions, oracleResults, ruleOutcomes);
 
     step = "verify_fixture";
@@ -223,6 +246,41 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
 
   await writer.writeResult(result);
   return result;
+}
+
+function isChanged(changes: ChangeSet): boolean {
+  return changes.added.length + changes.modified.length + changes.removed.length > 0;
+}
+
+// failureMessage is written verbatim into result.json, a shared durable artifact, and
+// printed to stderr — the same reason run-oracle's `detail` is capped at 500 characters.
+const DESCRIBE_CHANGES_LIMIT = 500;
+
+/**
+ * Names as many paths of a change set as fit within the limit, so an investigator
+ * reading a rejected run learns what moved without the message growing unbounded when a
+ * check plants thousands of paths in one pass.
+ */
+function describeChanges(changes: ChangeSet): string {
+  const entries = [
+    ...changes.added.map((path) => `added ${path}`),
+    ...changes.modified.map((path) => `modified ${path}`),
+    ...changes.removed.map((path) => `removed ${path}`),
+  ];
+
+  const kept: string[] = [];
+  let length = 0;
+  for (const entry of entries) {
+    const nextLength = length + (kept.length > 0 ? 2 : 0) + entry.length;
+    if (nextLength > DESCRIBE_CHANGES_LIMIT) break;
+    kept.push(entry);
+    length = nextLength;
+  }
+
+  const omitted = entries.length - kept.length;
+  if (omitted === 0) return kept.join(", ");
+  const suffix = `and ${String(omitted)} more path${omitted === 1 ? "" : "s"} omitted`;
+  return kept.length === 0 ? suffix : `${kept.join(", ")} (${suffix})`;
 }
 
 function mergeAssertions(
