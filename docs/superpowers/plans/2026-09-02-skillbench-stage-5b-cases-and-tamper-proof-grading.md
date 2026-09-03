@@ -998,7 +998,9 @@ npm --prefix .private run check
 npm run oracles:proof
 ```
 
-Expected: the composition succeeds, the private tests pass, and the prover reports `proved 5 assertion(s), 0 failure(s)`. If `scope-untouched-files` now passes its `fail` patch, the evidence is not reaching the check — fix that rather than the patch.
+Run `npm run oracles:proof` once **before** editing anything too, and keep both outputs: the pair is what shows the rewrite changed the instrument without changing the verdict.
+
+Expected: the composition succeeds, the private tests pass, and the prover reports `proved 5 assertion(s), 0 failure(s)` — the same as before this task. The rewrite is not a repair: the old check already read a faithful per-check copy, so it was passing. What changes is that the assertion stops depending on a live directory at all, which is what the spec requires and what closes the case of a watcher tampering with the scope check's own copy. If `scope-untouched-files` now passes its `fail` patch, the evidence is not reaching the check — fix that rather than the patch.
 
 - [ ] **Step 5: Retire the two rules this makes false**
 
