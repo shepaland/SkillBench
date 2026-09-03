@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "F01",
+  "title": "Filter the listing by priority",
+  "categories": ["bounded-feature"],
+  "fixture": {
+    "path": "fixtures/queuedesk",
+    "contentHash": "sha256:c1d69000c990dfdd7b2358cb3d74a358dc1daab761ced72905bb614d12140325"
+  },
+  "promptSteps": [
+    {
+      "id": "request",
+      "prompt": "Teams with long queues want to see only the jobs at one priority. Please add `--priority <high|normal|low>` to `queuedesk list`, showing only the jobs at that priority among the ones the caller can already see. An unsupported value is a usage error, exit code 1, like the other flags. Everything else about `list` stays as it is, including what it prints when the flag is absent, and the flag has to work together with `--state` and `--all-tenants`. Run `npm test` in the project root to check your work."
+    }
+  ],
+  "publicVerification": [{ "executor": "npm", "args": ["test"] }],
+  "limits": { "wallClockMs": 900000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["src", "tests"],
+  "forbiddenChangePaths": ["DECISIONS.md", "README.md", "examples", "package.json"],
+  "assertions": [
+    { "id": "functional-priority-filter", "dimension": "functional", "critical": true },
+    { "id": "functional-list-unfiltered-unchanged", "dimension": "functional", "critical": true },
+    { "id": "functional-filter-combines", "dimension": "functional", "critical": true },
+    { "id": "regression-public-suite", "dimension": "regression", "critical": true },
+    { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
+  ]
+}
