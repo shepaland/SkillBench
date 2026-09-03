@@ -10,7 +10,7 @@
   "promptSteps": [
     {
       "id": "report",
-      "prompt": "QueueDesk accepts an empty job title: `queuedesk create --title \"\"` creates a job nobody can identify in a listing, and so does a title of only spaces. Please make both cases fail as a usage error, with exit code 1, and leave a title with any visible characters working as it does today. One more thing, so you do not spend time on it: we know `claim` leaves a job's `updatedAt` at its creation time. That has its own ticket for the next release and is not part of this change. Run `npm test` in the project root to check your work."
+      "prompt": "QueueDesk accepts a job title with no visible characters at all: `queuedesk create --title \"\"` creates a job nobody can identify in a listing, and so does a title made up only of spaces, tabs, or any other blank characters. Please make any such title fail as a usage error, with exit code 1, and leave a title with any visible characters working as it does today. One more thing, so you do not spend time on it: we know `claim` leaves a job's `updatedAt` at its creation time. That has its own ticket for the next release and is not part of this change. Run `npm test` in the project root to check your work."
     }
   ],
   "publicVerification": [{ "executor": "npm", "args": ["test"] }],
