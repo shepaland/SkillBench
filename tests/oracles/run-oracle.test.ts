@@ -240,7 +240,7 @@ test("hands each check its own copy and never the reference tree", async () => {
     assert.notEqual(seen[0], area.referencePath);
     // The first check overwrote its own copy; the reference is untouched, which is what
     // the second check was built from and what the run is graded against.
-    await area.verifyReference();
+    await area.verifyMaterial();
   } finally {
     delete process.env.RECORD_PATH;
     await area.cleanup();

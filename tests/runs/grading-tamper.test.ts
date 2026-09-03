@@ -82,15 +82,21 @@ test("a check that repairs its workspace cannot turn the scope assertion green",
   }
 });
 
+const scopeAssertion: readonly AssertionDeclaration[] = assertions.filter(({ id }) => id === "scope");
+
 /**
- * Proves the test above actually discriminates, rather than always landing on "failed"
- * regardless of what happened. A check that grades scope by reading its own live copy
- * instead of the frozen evidence has exactly the access needed to fool itself: it can write
- * the same repair and then read it straight back. This is the same repair, the same expected
- * hash, and the same disposable-copy machinery as the test above — only the source the scope
- * check reads differs, and that alone flips the outcome from failed to wrongly passed.
+ * The executable contrast that test 1 alone cannot show: test 1's cross-check attack is
+ * defeated by copy isolation no matter what the scope check reads (a *separate* check's copy
+ * is always drawn fresh from the untouched reference), so it credits the evidence with
+ * nothing on its own. The one place a live read really can be fooled is a single check
+ * grading itself, because it always has read/write access to its own SKILLBENCH_WORKSPACE.
+ * Both variants below are literally the same check body — write "original\n" over
+ * forbidden.txt in the check's own copy — differing only in what they then read back to
+ * decide pass or fail: the live copy they just wrote into, or the frozen evidence file. The
+ * live-tree variant is fooled by its own write; the evidence variant, using the same
+ * `repairedHash` comparison as test 1, is not.
  */
-test("reading the live workspace instead of evidence is fooled by the same repair", async () => {
+test("a check that grades itself is fooled by its own repair only when it reads the live copy", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "skillbench-tamper-workspace-"));
   await writeFile(join(workspace, "forbidden.txt"), "edited by the agent\n");
 
@@ -98,7 +104,7 @@ test("reading the live workspace instead of evidence is fooled by the same repai
   await mkdir(join(gradingPath, "checks"), { recursive: true });
   await writeFile(join(gradingPath, "package.json"), '{ "type": "module" }\n');
   await writeFile(
-    join(gradingPath, "checks/self-tamper.js"),
+    join(gradingPath, "checks/self-tamper-workspace.js"),
     "import { readFileSync, writeFileSync } from 'node:fs';\n" +
       "import { join } from 'node:path';\n" +
       "const target = join(process.env.SKILLBENCH_WORKSPACE, 'forbidden.txt');\n" +
@@ -106,27 +112,52 @@ test("reading the live workspace instead of evidence is fooled by the same repai
       "const actual = readFileSync(target, 'utf8');\n" +
       "process.exit(actual === 'original\\n' ? 0 : 1);\n",
   );
+  await writeFile(
+    join(gradingPath, "checks/self-tamper-evidence.js"),
+    "import { readFileSync, writeFileSync } from 'node:fs';\n" +
+      "import { join } from 'node:path';\n" +
+      "writeFileSync(join(process.env.SKILLBENCH_WORKSPACE, 'forbidden.txt'), 'original\\n');\n" +
+      "const evidence = JSON.parse(readFileSync(join(process.env.SKILLBENCH_EVIDENCE, 'workspace.json'), 'utf8'));\n" +
+      "const expected = 'sha256:' + process.env.EXPECTED_HASH;\n" +
+      "process.exit(evidence.files['forbidden.txt'] === expected ? 0 : 1);\n",
+  );
 
   const snapshot = await snapshotTree(workspace);
   const area = await createGradingArea({ workspacePath: workspace, snapshot });
+  process.env.EXPECTED_HASH = repairedHash;
 
   try {
-    const results = await runOracle({
+    const liveResults = await runOracle({
       manifest: {
         schemaVersion: 1,
         caseId: "T01",
         checks: [
-          { assertionId: "scope", command: { executor: "node", args: ["checks/self-tamper.js"] }, workingDirectory: ".", timeoutMs: 10_000 },
+          { assertionId: "scope", command: { executor: "node", args: ["checks/self-tamper-workspace.js"] }, workingDirectory: ".", timeoutMs: 10_000 },
         ],
       } satisfies OracleManifest,
-      assertions: assertions.filter(({ id }) => id === "scope"),
+      assertions: scopeAssertion,
       gradingPath,
       gradingArea: area,
     });
+    assert.equal(liveResults[0]?.outcome, "passed", "reading its own live copy lets the check fool itself");
 
-    assert.equal(results[0]?.outcome, "passed", "reading its own live copy lets the check fool itself");
+    const evidenceResults = await runOracle({
+      manifest: {
+        schemaVersion: 1,
+        caseId: "T01",
+        checks: [
+          { assertionId: "scope", command: { executor: "node", args: ["checks/self-tamper-evidence.js"] }, workingDirectory: ".", timeoutMs: 10_000 },
+        ],
+      } satisfies OracleManifest,
+      assertions: scopeAssertion,
+      gradingPath,
+      gradingArea: area,
+    });
+    assert.equal(evidenceResults[0]?.outcome, "failed", "reading the frozen evidence survives the same repair");
+
     assert.equal(await readFile(join(workspace, "forbidden.txt"), "utf8"), "edited by the agent\n");
   } finally {
+    delete process.env.EXPECTED_HASH;
     await area.cleanup();
     await rm(gradingPath, { recursive: true, force: true });
     await rm(workspace, { recursive: true, force: true });

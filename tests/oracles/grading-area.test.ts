@@ -43,7 +43,7 @@ test("copies the workspace into a reference tree the checks never write to", asy
 
   try {
     assert.equal(await readFile(join(area.referencePath, "src/cli.js"), "utf8"), "export const value = 1;\n");
-    await area.verifyReference();
+    await area.verifyMaterial();
   } finally {
     await area.cleanup();
     await rm(workspace, { recursive: true, force: true });
@@ -58,11 +58,36 @@ test("reports a reference tree that changed, naming the path", async () => {
   try {
     await writeFile(join(area.referencePath, "src/cli.js"), "export const value = 2;\n");
     await assert.rejects(
-      () => area.verifyReference(),
+      () => area.verifyMaterial(),
       (error: unknown) =>
         error instanceof FileLifecycleError &&
         error.code === "CONTENT_HASH_MISMATCH" &&
         error.message.includes("src/cli.js"),
+    );
+  } finally {
+    await area.cleanup();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("reports an evidence file that changed, naming it rather than a workspace path", async () => {
+  // The spec says nothing a check does may change what the evidence says. The evidence
+  // directory is shared by every check and, unlike the reference tree, was never
+  // re-verified — this is what closes that gap.
+  const workspace = await createWorkspace();
+  const snapshot = await snapshotTree(workspace);
+  const area = await createGradingArea({ workspacePath: workspace, snapshot });
+
+  try {
+    await writeFile(join(area.evidencePath, "workspace.json"), '{ "schemaVersion": 1, "files": {} }\n');
+    await assert.rejects(
+      () => area.verifyMaterial(),
+      (error: unknown) =>
+        error instanceof FileLifecycleError &&
+        error.code === "CONTENT_HASH_MISMATCH" &&
+        error.message.includes("evidence file") &&
+        error.message.includes("workspace.json") &&
+        !error.message.includes(workspace),
     );
   } finally {
     await area.cleanup();
@@ -82,7 +107,7 @@ test("gives every check its own copy, and one copy cannot reach another", async 
     const second = await area.createCheckCopy();
     assert.notEqual(first.path, second.path);
     assert.equal(await readFile(join(second.path, "src/cli.js"), "utf8"), "export const value = 1;\n");
-    await area.verifyReference();
+    await area.verifyMaterial();
 
     await first.remove();
     await assert.rejects(() => stat(first.path));

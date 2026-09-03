@@ -90,11 +90,11 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
       throw new Error(`assertion ${assertion.id} has no oracle check after correspondence validation`);
     }
 
-    // The reference is verified immediately before the copy is taken, so a repair has to
-    // be in place exactly when SkillBench looks. Restoring it afterwards no longer helps:
-    // the tree this check reads was built from what was verified, not from what is left
-    // at the end.
-    await input.gradingArea.verifyReference();
+    // The reference and the evidence file are both verified immediately before the copy is
+    // taken, so a repair has to be in place exactly when SkillBench looks. Restoring it
+    // afterwards no longer helps: the tree this check reads was built from what was
+    // verified, not from what is left at the end.
+    await input.gradingArea.verifyMaterial();
     const copy = await input.gradingArea.createCheckCopy();
     try {
       const env = { ...baseEnvironment, SKILLBENCH_WORKSPACE: copy.path };
