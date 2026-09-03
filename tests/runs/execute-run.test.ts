@@ -292,11 +292,18 @@ test("a determined check that finds the material root by searching still trips t
     await writeJson(project.caseManifestPath, { ...project.caseManifest, assertions });
   });
 
-  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e1", { tempParent }));
+  try {
+    const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e1", { tempParent }));
 
-  assert.equal(result.status, "errored");
-  assert.equal(result.failedStep, "grade");
-  assert.match(result.failureMessage, /changed while the checks ran/u);
+    assert.equal(result.status, "errored");
+    assert.equal(result.failedStep, "grade");
+    // Named exactly, because three guards can report a change while the checks ran — the
+    // workspace guard, the mounted-oracle guard, and this one. Only the reference tree
+    // was touched here, so only `verifyMaterial()`'s message proves the right one fired.
+    assert.match(result.failureMessage, /^the graded copy changed while the checks ran: modified index\.js$/u);
+  } finally {
+    await rm(tempParent, { recursive: true, force: true });
+  }
 });
 
 test("an exhausted adapter reports exhausted and still grades", async () => {
