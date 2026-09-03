@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "B02",
+  "title": "Claim and complete cross tenant boundaries",
+  "categories": ["bug-fix", "security"],
+  "fixture": {
+    "path": "fixtures/queuedesk-tenant-leak",
+    "contentHash": "sha256:8ade7ca8960f5f46185e0a4da99fd0573fb0c33adba9e9a38f19dad9e8e58a73"
+  },
+  "promptSteps": [
+    {
+      "id": "report",
+      "prompt": "A worker at one tenant was handed a job that belongs to a different tenant, and was able to complete it. QueueDesk is supposed to keep tenants apart: `claim` hands back only jobs the acting tenant owns, and `complete` refuses a job the acting tenant cannot see. Please fix the cause. Keep the decision recorded in DECISIONS.md that a job belonging to another tenant and a job that does not exist answer the same way, so that one tenant cannot learn whether another tenant's job exists. Run `npm test` in the project root to check your work."
+    }
+  ],
+  "publicVerification": [{ "executor": "npm", "args": ["test"] }],
+  "limits": { "wallClockMs": 900000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["src", "tests"],
+  "forbiddenChangePaths": ["DECISIONS.md", "README.md", "examples", "package.json"],
+  "assertions": [
+    { "id": "security-claim-isolated", "dimension": "security", "critical": true },
+    { "id": "security-complete-isolated", "dimension": "security", "critical": true },
+    { "id": "functional-error-indistinguishable", "dimension": "functional", "critical": true },
+    { "id": "regression-public-suite", "dimension": "regression", "critical": true },
+    { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
+  ]
+}
