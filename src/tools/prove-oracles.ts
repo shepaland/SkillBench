@@ -6,10 +6,12 @@ import { loadCatalog, type CatalogCase } from "../catalog/load-catalog.js";
 import type { AssertionDeclaration, OracleManifest } from "../domain/model.js";
 import { copySafeTree, isSameOrInside } from "../filesystem/safe-tree.js";
 import { hashFile } from "../integrity/content-hash.js";
+import { createGradingArea } from "../oracles/grading-area.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
 import { loadOracleManifest } from "../oracles/oracle-manifest.js";
 import { runOracle } from "../oracles/run-oracle.js";
 import { ProjectPaths } from "../paths/project-paths.js";
+import { snapshotTree } from "../runs/snapshot.js";
 import { ManifestValidator } from "../schemas/validator.js";
 
 export type PatchKind = "pass" | "fail";
@@ -315,17 +317,25 @@ async function gradeWorkspace(input: GradeWorkspaceInput): Promise<{ outcome: st
       caseId: manifest.caseId,
       checks: [check],
     };
-    const results = await runOracle({
-      manifest: narrowed,
-      assertions: [input.assertion],
-      gradingPath: mounted.gradingPath,
+    const area = await createGradingArea({
       workspacePath: input.workspacePath,
+      snapshot: await snapshotTree(input.workspacePath),
     });
-    const result = results[0];
-    if (result === undefined) {
-      throw new Error(`the oracle returned no result for assertion ${input.assertion.id}`);
+    try {
+      const results = await runOracle({
+        manifest: narrowed,
+        assertions: [input.assertion],
+        gradingPath: mounted.gradingPath,
+        gradingArea: area,
+      });
+      const result = results[0];
+      if (result === undefined) {
+        throw new Error(`the oracle returned no result for assertion ${input.assertion.id}`);
+      }
+      return { outcome: result.outcome, detail: result.outcome === "error" ? result.detail : "" };
+    } finally {
+      await area.cleanup();
     }
-    return { outcome: result.outcome, detail: result.outcome === "error" ? result.detail : "" };
   } finally {
     await lifecycle.cleanup();
   }

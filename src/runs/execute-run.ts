@@ -3,6 +3,7 @@ import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
 import type { AssertionDeclaration, TranscriptRule } from "../domain/model.js";
 import { hashTree } from "../integrity/content-hash.js";
 import type { RuntimeAdapter, RuntimeExecution } from "../runtime/runtime-adapter.js";
+import { createGradingArea, type GradingArea } from "../oracles/grading-area.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
 import { loadOracleManifest } from "../oracles/oracle-manifest.js";
 import { runOracle, type AssertionResult } from "../oracles/run-oracle.js";
@@ -61,6 +62,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
 
   let workspace: MaterializedWorkspace | undefined;
   let lifecycle: OracleLifecycle | undefined;
+  let gradingArea: GradingArea | undefined;
   let step: PipelineStep = "materialize";
   let baseline: TreeSnapshot = [];
   let execution: RuntimeExecution | undefined;
@@ -150,13 +152,20 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       );
     }
     const oracleManifest = await loadOracleManifest(mounted.gradingPath, input.validator);
+    // Grading reads a copy and a description recorded here, not the workspace itself:
+    // a check runs code the agent wrote, and that code knows the workspace's path.
+    gradingArea = await createGradingArea({
+      workspacePath: workspace.workspacePath,
+      snapshot: finalSnapshot,
+      ...(input.tempParent === undefined ? {} : { tempParent: input.tempParent }),
+    });
     const oracleResults = await runOracle({
       manifest: oracleManifest,
       assertions: input.catalogCase.manifest.assertions.filter(
         ({ transcriptRuleId }) => transcriptRuleId === undefined,
       ),
       gradingPath: mounted.gradingPath,
-      workspacePath: workspace.workspacePath,
+      gradingArea,
     });
     // A check runs code the measured agent wrote, so the grading directory is hashed
     // again once every check has finished. An oracle that changed during grading may
@@ -209,6 +218,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     // Cleanup the adapter could not complete is recorded like any other cleanup
     // failure: it belongs beside the run outcome, never in place of it.
     cleanupFailures.push(...execution?.cleanupFailures ?? []);
+    const gradingAreaFailure = await cleanupQuietly(gradingArea, "grading area");
+    if (gradingAreaFailure !== undefined) cleanupFailures.push(gradingAreaFailure);
     const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
     if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
     if (input.keepWorkspace === true) {

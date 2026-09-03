@@ -265,7 +265,7 @@ test("names the workspace copy, the oracle, and the evidence directory in the en
   try {
     const results = await runOracle({
       manifest: { schemaVersion: 1, caseId: "T01", checks: [check("pass-check", "environment.js")] } satisfies OracleManifest,
-      assertions: [assertions[0]!],
+      assertions: assertions.slice(0, 1),
       gradingPath,
       gradingArea: area,
     });
