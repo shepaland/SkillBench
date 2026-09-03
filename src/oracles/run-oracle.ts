@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import type { AssertionDeclaration, OracleCheck, OracleManifest } from "../domain/model.js";
 import { ProjectPaths } from "../paths/project-paths.js";
+import type { GradingArea } from "./grading-area.js";
 import { assertOracleCoversAssertions } from "./oracle-manifest.js";
 
 export type AssertionOutcome = "passed" | "failed" | "error";
@@ -37,7 +38,8 @@ export interface RunOracleInput {
   readonly manifest: OracleManifest;
   readonly assertions: readonly AssertionDeclaration[];
   readonly gradingPath: string;
-  readonly workspacePath: string;
+  /** Supplies the frozen evidence and one disposable workspace copy per check. */
+  readonly gradingArea: GradingArea;
   readonly spawn?: OracleSpawn;
   readonly nowMs?: () => number;
 }
@@ -75,10 +77,10 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
   const nowMs = input.nowMs ?? (() => Date.now());
   const checkById = new Map(input.manifest.checks.map((check) => [check.assertionId, check]));
   const gradingPaths = await ProjectPaths.create(input.gradingPath);
-  const env = {
+  const baseEnvironment = {
     ...filterEnvironment(process.env),
-    SKILLBENCH_WORKSPACE: input.workspacePath,
     SKILLBENCH_ORACLE: input.gradingPath,
+    SKILLBENCH_EVIDENCE: input.gradingArea.evidencePath,
   };
 
   const results: AssertionResult[] = [];
@@ -87,7 +89,19 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
     if (check === undefined) {
       throw new Error(`assertion ${assertion.id} has no oracle check after correspondence validation`);
     }
-    results.push(await executeCheck(assertion, check, gradingPaths, env, spawn, nowMs));
+
+    // The reference is verified immediately before the copy is taken, so a repair has to
+    // be in place exactly when SkillBench looks. Restoring it afterwards no longer helps:
+    // the tree this check reads was built from what was verified, not from what is left
+    // at the end.
+    await input.gradingArea.verifyReference();
+    const copy = await input.gradingArea.createCheckCopy();
+    try {
+      const env = { ...baseEnvironment, SKILLBENCH_WORKSPACE: copy.path };
+      results.push(await executeCheck(assertion, check, gradingPaths, env, spawn, nowMs));
+    } finally {
+      await copy.remove();
+    }
   }
   return Object.freeze(results);
 }
