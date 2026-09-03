@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,12 @@ const assertions: readonly AssertionDeclaration[] = [
   { id: "repair", dimension: "functional", critical: false },
   { id: "scope", dimension: "scope", critical: true },
 ];
+
+// The hash of the value the repair check fakes forbidden.txt back to. It is reachable only
+// if the evidence pipeline is broken and workspace.json ends up describing a repaired tree
+// instead of the one recorded before any check ran — which is exactly what these tests must
+// be able to tell apart from "the isolation held".
+const repairedHash = createHash("sha256").update("original\n").digest("hex");
 
 /**
  * The Stage 5A attack: agent-authored code running inside a check repairs the tree so a
@@ -44,8 +51,10 @@ test("a check that repairs its workspace cannot turn the scope assertion green",
 
   const snapshot = await snapshotTree(workspace);
   const area = await createGradingArea({ workspacePath: workspace, snapshot });
-  // The baseline hash of the untouched file, which the agent's edit no longer matches.
-  process.env.EXPECTED_HASH = "0".repeat(64);
+  // The value the repair check fakes the file back to. If the evidence pipeline regenerated
+  // workspace.json from the repaired tree instead of the untouched one, this is exactly the
+  // hash that would wrongly match — which is what makes this assertion worth making.
+  process.env.EXPECTED_HASH = repairedHash;
 
   try {
     const results = await runOracle({
@@ -67,6 +76,57 @@ test("a check that repairs its workspace cannot turn the scope assertion green",
     assert.equal(await readFile(join(workspace, "forbidden.txt"), "utf8"), "edited by the agent\n");
   } finally {
     delete process.env.EXPECTED_HASH;
+    await area.cleanup();
+    await rm(gradingPath, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Proves the test above actually discriminates, rather than always landing on "failed"
+ * regardless of what happened. A check that grades scope by reading its own live copy
+ * instead of the frozen evidence has exactly the access needed to fool itself: it can write
+ * the same repair and then read it straight back. This is the same repair, the same expected
+ * hash, and the same disposable-copy machinery as the test above — only the source the scope
+ * check reads differs, and that alone flips the outcome from failed to wrongly passed.
+ */
+test("reading the live workspace instead of evidence is fooled by the same repair", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "skillbench-tamper-workspace-"));
+  await writeFile(join(workspace, "forbidden.txt"), "edited by the agent\n");
+
+  const gradingPath = await mkdtemp(join(tmpdir(), "skillbench-tamper-oracle-"));
+  await mkdir(join(gradingPath, "checks"), { recursive: true });
+  await writeFile(join(gradingPath, "package.json"), '{ "type": "module" }\n');
+  await writeFile(
+    join(gradingPath, "checks/self-tamper.js"),
+    "import { readFileSync, writeFileSync } from 'node:fs';\n" +
+      "import { join } from 'node:path';\n" +
+      "const target = join(process.env.SKILLBENCH_WORKSPACE, 'forbidden.txt');\n" +
+      "writeFileSync(target, 'original\\n');\n" +
+      "const actual = readFileSync(target, 'utf8');\n" +
+      "process.exit(actual === 'original\\n' ? 0 : 1);\n",
+  );
+
+  const snapshot = await snapshotTree(workspace);
+  const area = await createGradingArea({ workspacePath: workspace, snapshot });
+
+  try {
+    const results = await runOracle({
+      manifest: {
+        schemaVersion: 1,
+        caseId: "T01",
+        checks: [
+          { assertionId: "scope", command: { executor: "node", args: ["checks/self-tamper.js"] }, workingDirectory: ".", timeoutMs: 10_000 },
+        ],
+      } satisfies OracleManifest,
+      assertions: assertions.filter(({ id }) => id === "scope"),
+      gradingPath,
+      gradingArea: area,
+    });
+
+    assert.equal(results[0]?.outcome, "passed", "reading its own live copy lets the check fool itself");
+    assert.equal(await readFile(join(workspace, "forbidden.txt"), "utf8"), "edited by the agent\n");
+  } finally {
     await area.cleanup();
     await rm(gradingPath, { recursive: true, force: true });
     await rm(workspace, { recursive: true, force: true });
