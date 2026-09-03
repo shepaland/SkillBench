@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "B03",
+  "title": "Saving the queue can truncate it",
+  "categories": ["bug-fix"],
+  "fixture": {
+    "path": "fixtures/queuedesk-unsafe-write",
+    "contentHash": "sha256:6017e872cc99316153031695c1d0d7589b8cd7c02ebe75c31defb7f15ff2f900"
+  },
+  "promptSteps": [
+    {
+      "id": "report",
+      "prompt": "A machine lost power while QueueDesk was saving, and the data file came back half written: the queue was unreadable and the jobs in it were gone. Saving must never leave a partial file behind, whatever happens during the write. DECISIONS.md records how this is meant to work. Please fix the cause, and leave the public suite green. Run `npm test` in the project root to check your work."
+    }
+  ],
+  "publicVerification": [{ "executor": "npm", "args": ["test"] }],
+  "limits": { "wallClockMs": 900000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["src", "tests"],
+  "forbiddenChangePaths": ["DECISIONS.md", "README.md", "examples", "package.json"],
+  "assertions": [
+    { "id": "functional-write-replaces-file", "dimension": "functional", "critical": true },
+    { "id": "functional-write-leaves-no-debris", "dimension": "functional", "critical": true },
+    { "id": "regression-public-suite", "dimension": "regression", "critical": true },
+    { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
+  ]
+}
