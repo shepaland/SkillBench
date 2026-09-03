@@ -8,7 +8,8 @@ import { canonicalJson } from "../integrity/canonical-json.js";
 import { hashFile } from "../integrity/content-hash.js";
 import { describeChanges, diffSnapshots, snapshotTree, type TreeSnapshot } from "../runs/snapshot.js";
 
-const areaPrefix = "skillbench-grading-area-";
+const materialPrefix = "skillbench-grading-material-";
+const copiesPrefix = "skillbench-grading-copies-";
 const copyPrefix = "check-";
 const evidenceFileName = "workspace.json";
 
@@ -56,9 +57,17 @@ export async function createGradingArea(input: CreateGradingAreaInput): Promise<
   // `/var` -> `/private/var` link, so an unresolved path makes `process.argv[1]` and
   // `import.meta.url` disagree and a CLI entrypoint guard never fires.
   const parent = await realpath(input.tempParent ?? tmpdir());
-  const root = await mkdtemp(join(parent, areaPrefix));
-  const referencePath = join(root, "reference");
-  const evidencePath = join(root, "evidence");
+  // The reference and the evidence live under their own temporary root, separate from
+  // the one each check copy is made under. A check's own copy sits at
+  // `<copiesRoot>/check-XXXX/workspace`; if that copy and the material shared the same
+  // root, `../../reference` and `../../evidence/workspace.json` would reach them. Two
+  // independently named roots mean no fixed relative path from inside a copy leads
+  // there — reaching the material still needs the absolute path, which a check is never
+  // handed.
+  const materialRoot = await mkdtemp(join(parent, materialPrefix));
+  const copiesRoot = await mkdtemp(join(parent, copiesPrefix));
+  const referencePath = join(materialRoot, "reference");
+  const evidencePath = join(materialRoot, "evidence");
   const evidenceFilePath = join(evidencePath, evidenceFileName);
 
   let evidenceHash: ContentHash;
@@ -74,7 +83,8 @@ export async function createGradingArea(input: CreateGradingAreaInput): Promise<
     await writeFile(evidenceFilePath, `${canonicalJson({ schemaVersion: 1, files })}\n`);
     evidenceHash = await hashFile(evidenceFilePath);
   } catch (cause: unknown) {
-    await rm(root, { recursive: true, force: true });
+    await rm(materialRoot, { recursive: true, force: true });
+    await rm(copiesRoot, { recursive: true, force: true });
     throw cause;
   }
 
@@ -86,7 +96,7 @@ export async function createGradingArea(input: CreateGradingAreaInput): Promise<
       await assertFileMatches(evidenceFilePath, evidenceHash, "the evidence file changed while the checks ran");
     },
     createCheckCopy: async (): Promise<CheckCopy> => {
-      const copyRoot = await mkdtemp(join(root, copyPrefix));
+      const copyRoot = await mkdtemp(join(copiesRoot, copyPrefix));
       const path = join(copyRoot, "workspace");
       await copySafeTree(referencePath, path);
       return Object.freeze({
@@ -97,7 +107,8 @@ export async function createGradingArea(input: CreateGradingAreaInput): Promise<
       });
     },
     cleanup: async () => {
-      await rm(root, { recursive: true, force: true });
+      await rm(materialRoot, { recursive: true, force: true });
+      await rm(copiesRoot, { recursive: true, force: true });
     },
   });
 }

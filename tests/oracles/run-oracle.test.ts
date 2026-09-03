@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -218,7 +218,11 @@ test("hands each check its own copy and never the reference tree", async () => {
       "writeFileSync(join(workspace, 'marker.txt'), 'tampered\\n');\n" +
       "process.exit(0);\n",
   );
-  const recordPath = join(gradingPath, "seen.txt");
+  // Kept outside the grading directory: a check that wrote here instead would trip the
+  // new "the mounted oracle changed while the checks ran" guard between the first check
+  // and the second, which this test is not exercising.
+  const recordScratch = await mkdtemp(join(tmpdir(), "skillbench-run-oracle-record-"));
+  const recordPath = join(recordScratch, "seen.txt");
   process.env.RECORD_PATH = recordPath;
 
   try {
@@ -243,6 +247,7 @@ test("hands each check its own copy and never the reference tree", async () => {
     await area.verifyMaterial();
   } finally {
     delete process.env.RECORD_PATH;
+    await rm(recordScratch, { recursive: true, force: true });
     await area.cleanup();
   }
 });
@@ -306,6 +311,96 @@ test("stops the run when the reference tree changed between two checks", async (
     );
   } finally {
     delete process.env.REFERENCE_PATH;
+    await area.cleanup();
+  }
+});
+
+test("stops the run when the mounted oracle changes between two checks", async () => {
+  const { gradingPath } = await createOracleFixture();
+  const { area } = await createArea();
+  await writeFile(
+    join(gradingPath, "checks/tamper-oracle.js"),
+    "import { writeFileSync } from 'node:fs';\n" +
+      "import { join } from 'node:path';\n" +
+      // A check legitimately receives SKILLBENCH_ORACLE; this check simply misuses it.
+      "writeFileSync(join(process.env.SKILLBENCH_ORACLE, 'planted.txt'), 'tampered\\n');\n" +
+      "process.exit(0);\n",
+  );
+  // Kept outside the grading directory, like the record path above: this check proves
+  // the run never reaches the second check, so it must not itself trip the guard it is
+  // used to observe.
+  const recordScratch = await mkdtemp(join(tmpdir(), "skillbench-run-oracle-record-"));
+  const recordPath = join(recordScratch, "second-check-ran.txt");
+  await writeFile(
+    join(gradingPath, "checks/record-ran.js"),
+    "import { writeFileSync } from 'node:fs';\n" +
+      "writeFileSync(process.env.RECORD_PATH, 'ran\\n');\n" +
+      "process.exit(0);\n",
+  );
+  process.env.RECORD_PATH = recordPath;
+
+  try {
+    await assert.rejects(
+      () =>
+        runOracle({
+          manifest: {
+            schemaVersion: 1,
+            caseId: "T01",
+            checks: [check("pass-check", "tamper-oracle.js"), check("fail-check", "record-ran.js")],
+          } satisfies OracleManifest,
+          assertions,
+          gradingPath,
+          gradingArea: area,
+        }),
+      (error: unknown) =>
+        error instanceof FileLifecycleError &&
+        error.code === "CONTENT_HASH_MISMATCH" &&
+        error.message.includes("the mounted oracle changed while the checks ran") &&
+        error.message.includes(gradingPath),
+    );
+    // The second check would have written `recordPath` if it ran; its absence is what
+    // confirms the guard fired before it, not after both checks completed.
+    await assert.rejects(() => stat(recordPath));
+  } finally {
+    delete process.env.RECORD_PATH;
+    await rm(recordScratch, { recursive: true, force: true });
+    await area.cleanup();
+  }
+});
+
+test("stops the run when the mounted oracle changes during the final check", async () => {
+  const { gradingPath } = await createOracleFixture();
+  const { area } = await createArea();
+  await writeFile(
+    join(gradingPath, "checks/tamper-oracle.js"),
+    "import { writeFileSync } from 'node:fs';\n" +
+      "import { join } from 'node:path';\n" +
+      "writeFileSync(join(process.env.SKILLBENCH_ORACLE, 'planted.txt'), 'tampered\\n');\n" +
+      "process.exit(0);\n",
+  );
+
+  try {
+    await assert.rejects(
+      () =>
+        runOracle({
+          manifest: {
+            schemaVersion: 1,
+            caseId: "T01",
+            checks: [check("pass-check", "tamper-oracle.js")],
+          } satisfies OracleManifest,
+          // A single check: the only place left for the guard to catch this tamper is
+          // the verification after the loop, since none of it happened before the check
+          // (the pre-check hash still matched) and there is no later check to catch it.
+          assertions: assertions.slice(0, 1),
+          gradingPath,
+          gradingArea: area,
+        }),
+      (error: unknown) =>
+        error instanceof FileLifecycleError &&
+        error.code === "CONTENT_HASH_MISMATCH" &&
+        error.message.includes("the mounted oracle changed while the checks ran"),
+    );
+  } finally {
     await area.cleanup();
   }
 });

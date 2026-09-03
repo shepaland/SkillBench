@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import type { AssertionDeclaration, OracleCheck, OracleManifest } from "../domain/model.js";
+import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
+import { hashTree } from "../integrity/content-hash.js";
 import { ProjectPaths } from "../paths/project-paths.js";
 import type { GradingArea } from "./grading-area.js";
 import { assertOracleCoversAssertions } from "./oracle-manifest.js";
@@ -83,6 +85,24 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
     SKILLBENCH_EVIDENCE: input.gradingArea.evidencePath,
   };
 
+  // Each check also runs inside the mounted oracle itself — as its own working
+  // directory, per `oracle.json`'s `workingDirectory` — which sits right next to
+  // `baseline.json`, `contract.json`, and the carried `tests/`. Hashed once here, then
+  // re-hashed and compared immediately before every check and once more after the last
+  // one, a repair made to that directory during grading is caught the instant SkillBench
+  // next looks, the same way `verifyMaterial()` already catches one made to the
+  // reference tree.
+  const gradingDirectoryHash = await hashTree(input.gradingPath);
+  const verifyGradingDirectory = async (): Promise<void> => {
+    const currentHash = await hashTree(input.gradingPath);
+    if (currentHash !== gradingDirectoryHash) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `the mounted oracle changed while the checks ran: ${input.gradingPath}`,
+      );
+    }
+  };
+
   const results: AssertionResult[] = [];
   for (const assertion of input.assertions) {
     const check = checkById.get(assertion.id);
@@ -90,6 +110,7 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
       throw new Error(`assertion ${assertion.id} has no oracle check after correspondence validation`);
     }
 
+    await verifyGradingDirectory();
     // The reference and the evidence file are both verified immediately before the copy is
     // taken, so a repair has to be in place exactly when SkillBench looks. Restoring it
     // afterwards no longer helps: the tree this check reads was built from what was
@@ -103,6 +124,13 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
       await copy.remove();
     }
   }
+  await verifyGradingDirectory();
+  // The final check's own copy was made from material verified right before it, but a
+  // change the final check itself makes — typically the scope check, since nothing runs
+  // after it — was never checked against afterwards. Verifying once more here closes
+  // that: the run is graded from the loop above only once this confirms nothing changed
+  // during it, from the first check's copy to the last.
+  await input.gradingArea.verifyMaterial();
   return Object.freeze(results);
 }
 

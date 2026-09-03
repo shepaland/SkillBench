@@ -156,8 +156,10 @@ test("a private oracle changed after freezing reports errored at the grade step"
 
 test("a private oracle changed while the checks ran reports errored at the grade step", async () => {
   // A check runs code the measured agent wrote, so the grading directory can be
-  // rewritten between the pre-run hash and the last assertion. The assertions of such
-  // a run cannot be trusted, whatever they say.
+  // rewritten between the pre-run hash and the last assertion. `runOracle` itself now
+  // catches this the instant its own after-loop hash disagrees with the hash it took
+  // before the single check ran, before `executeRun`'s own frozen-hash comparison (a
+  // second, independent line of defense — see the test below) ever gets a turn.
   const harness = await createHarness(async (project) => {
     await writeFile(
       join(project.oracleDirectory, "checks/assert-1.js"),
@@ -175,9 +177,7 @@ test("a private oracle changed while the checks ran reports errored at the grade
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "grade");
-  assert.match(result.failureMessage, /private oracle changed while the checks ran/u);
-  assert.match(result.failureMessage, /mounted sha256:[0-9a-f]{64}/u);
-  assert.match(result.failureMessage, /frozen sha256:[0-9a-f]{64}/u);
+  assert.match(result.failureMessage, /the mounted oracle changed while the checks ran: .+/u);
   assert.equal(result.assertions.length, 0);
 });
 
@@ -264,23 +264,27 @@ test("a large change set produces a bounded failure message that names the omitt
   }
 });
 
-test("reports a run whose graded copy changed while the checks ran", async () => {
-  // A check cannot normally learn the reference tree's path either, but it can find it as
-  // the parent of its own disposable copy: that is exactly the "search for it" attack, and
-  // the guard inside runOracle has to catch it even though it fires mid-oracle, not after.
+test("a determined check that finds the material root by searching still trips the mid-run guard", async () => {
+  // A check still cannot normally learn the material root's path, but a resourceful
+  // attacker could find it the same way the workspace guard tests above find the
+  // workspace: by the "skillbench-grading-material-" prefix `createGradingArea` uses,
+  // searched for under a temp parent private to this test so it cannot collide with any
+  // other test's material root.
   const assertions: readonly AssertionDeclaration[] = [
     { id: "tamper", dimension: "functional", critical: false },
     { id: "after", dimension: "functional", critical: false },
   ];
+  const tempParent = await mkdtemp(join(tmpdir(), "skillbench-material-guard-"));
   const harness = await createHarness(async (project) => {
     await writeOracleForAssertions(project, assertions);
     await writeFile(
       join(project.oracleDirectory, "checks/tamper.js"),
       [
-        'import { writeFileSync } from "node:fs";',
+        'import { readdirSync, writeFileSync } from "node:fs";',
         'import { join } from "node:path";',
-        "const workspace = process.env.SKILLBENCH_WORKSPACE;",
-        'writeFileSync(join(workspace, "../../reference", "index.js"), "export const queued = [1];\\n");',
+        `const root = ${JSON.stringify(tempParent)};`,
+        'const entry = readdirSync(root).find((name) => name.startsWith("skillbench-grading-material-"));',
+        'writeFileSync(join(root, entry, "reference", "index.js"), "export const queued = [1];\\n");',
         "process.exit(0);",
         "",
       ].join("\n"),
@@ -288,7 +292,7 @@ test("reports a run whose graded copy changed while the checks ran", async () =>
     await writeJson(project.caseManifestPath, { ...project.caseManifest, assertions });
   });
 
-  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e0"));
+  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e1", { tempParent }));
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "grade");

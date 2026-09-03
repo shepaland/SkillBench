@@ -119,6 +119,28 @@ test("gives every check its own copy, and one copy cannot reach another", async 
   }
 });
 
+test("a check copy cannot reach the evidence file by a relative path", async () => {
+  const workspace = await createWorkspace();
+  const snapshot = await snapshotTree(workspace);
+  const area = await createGradingArea({ workspacePath: workspace, snapshot });
+
+  try {
+    const copy = await area.createCheckCopy();
+    // A copy used to sit at `<root>/check-XXXX/workspace`, with the evidence directory a
+    // sibling of `check-XXXX` at `<root>/evidence` — reachable from the copy as
+    // `../../evidence/workspace.json`. The copies and the material now live under their
+    // own, separately named temporary roots, so that fixed relative path leads nowhere:
+    // it must not resolve to the real evidence file, and nothing must exist there at all.
+    const guessedEvidencePath = join(copy.path, "..", "..", "evidence", "workspace.json");
+    assert.notEqual(guessedEvidencePath, join(area.evidencePath, "workspace.json"));
+    await assert.rejects(() => stat(guessedEvidencePath));
+    await copy.remove();
+  } finally {
+    await area.cleanup();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("hands out canonical paths, so a copied CLI entrypoint still recognizes itself", async () => {
   const workspace = await createWorkspace();
   const snapshot = await snapshotTree(workspace);

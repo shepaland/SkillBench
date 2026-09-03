@@ -20,7 +20,7 @@
   "assertions": [
     { "id": "regression-cli-contract", "dimension": "regression", "critical": true },
     { "id": "regression-public-suite", "dimension": "regression", "critical": true },
-    { "id": "functional-parse-split", "dimension": "functional", "critical": false },
+    { "id": "functional-parse-split", "dimension": "functional", "critical": true },
     { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
   ]
 }
