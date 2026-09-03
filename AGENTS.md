@@ -15,19 +15,19 @@ The primary metric is `solve_rate`. Diagnostic metrics are `correctness`, `regre
 
 ## Current State
 
-- Stage 1, Stage 2A, Stage 2B, Stage 3, Stage 4, and Stage 5A are complete.
+- Stage 1, Stage 2A, Stage 2B, Stage 3, Stage 4, Stage 5A, and Stage 5B are complete.
 - `validate`, `list`, `dry-run`, and `run` are implemented. `compare` and `report` remain reserved commands and currently return exit code `2`.
 - `validate` checks the catalog and, unless `--public-only` is used, loads each case's private oracle manifest and confirms it covers exactly the declared assertions without a `transcriptRuleId`.
 - `list` prints the cases and variants in a project, with a `--json` option for machine-readable output.
 - `dry-run` freezes every input for a run and prints the execution plan without materializing a workspace or starting an agent. `dry-run --runtime codex` still requires an installed runtime, because the frozen manifest records the runtime version.
 - `run` executes against the deterministic fake runtime and against a live Codex session selected with `--runtime codex`.
 - The QueueDesk fixture and its four defect copies are committed under `fixtures/`.
-- The repository ships one case, `B01`, and one variant, `control`, so `validate --public-only` reports `1` case and `1` variant. No run can be started without a variant, which is why `control` exists.
+- The repository ships seven cases — `B01`, `B02`, `B03`, `R02`, `F01`, `F04`, `R01` — and one variant, `control`, so `validate --public-only` reports `7` cases and `1` variant. No run can be started without a variant, which is why `control` exists.
 - `B01` declares five oracle-graded assertions: three functional, one regression, and one scope. Four are critical; `functional-renderer-neutral` is a diagnostic structural check and is not.
 - The private grading material lives in a separate private repository, `github.com/shepaland/SkillBench-private`, cloned into `.private/`. It holds the oracle sources, the composition script, the generated fixture baselines, and the proof patches. It has no dependencies, and its own commands are `npm run build` and `npm run check`, run from `.private`.
 - `validate` without `--public-only` now passes when that private material is present.
-- `npm run oracles:proof` proves that every oracle-graded assertion can both pass and fail. It is not part of `npm run check`, because a fresh clone has no private material; without it the command fails loudly instead of reporting success.
-- The next delivery stage is Stage 5B, which adds six more cases graded by running code.
+- `npm run oracles:proof` proves that every oracle-graded assertion can both pass and fail, thirty-one assertions in both directions. It is not part of `npm run check`, because a fresh clone has no private material; without it the command fails loudly instead of reporting success.
+- The next delivery stage is Stage 5C, which adds the five dialogue and process cases.
 
 Do not describe planned functionality as already implemented. Update this section whenever a delivery stage changes the real CLI behavior.
 
@@ -63,6 +63,7 @@ These two commands need the private repository cloned into `.private/` and do no
 
 - `npm run oracles:proof` composes a correct and a deliberately broken copy of each case's project and grades both through SkillBench's own mounting and oracle-running code, proving that every oracle-graded assertion can both pass and fail. It is deliberately outside `npm run check`.
 - `npm --prefix .private run check` verifies the composed oracles still match their sources and runs the private repository's own tests. Use `npm --prefix .private run build` to recompose them after editing a source.
+- `node scripts/build-contract.mjs <case-id> <fixture-path>` (run from `.private/`) records the command-line contract for one case: a battery of every command and error path the QueueDesk fixture answers today, replayed byte for byte against an agent's work. `--check` regenerates every recorded contract and fails on a difference; it runs as part of `npm --prefix .private run check`.
 
 Their order matters. `npm run oracles:proof` reads the composed oracle under `.private/oracles/`, not the sources, so `npm --prefix .private run check` must run first; otherwise a stale composed oracle is what gets proven. The delivery gate is these five commands in this order, and all five must exit `0`:
 

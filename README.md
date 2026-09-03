@@ -68,13 +68,33 @@ QueueDesk is a small offline job queue: a command-line tool that lets a team cre
 
 ### Cases and oracles
 
-A case is one programming task that the benchmark gives to every variant. Its manifest, `cases/<case-id>/case.json`, names the fixture to copy, the prompt the agent receives, the limits it works under, the paths it is allowed to change, and the list of assertions that decide whether the work counts as solved. This repository ships one case, `B01`: `queuedesk claim` hands back the oldest queued job instead of the highest-priority one, and the agent is asked to fix the cause rather than the failing test.
+A case is one programming task that the benchmark gives to every variant. Its manifest, `cases/<case-id>/case.json`, names the fixture to copy, the prompt the agent receives, the limits it works under, the paths it is allowed to change, and the list of assertions that decide whether the work counts as solved. This repository ships seven cases, all built around the QueueDesk fixture:
 
-An assertion is one automated check with a name and a dimension such as `functional`, `regression`, or `scope`. A critical assertion decides the result: if one of them fails, the run is unsolved. A non-critical assertion only reports something about the work without deciding it. `B01` declares five assertions — three functional, one regression, and one scope — and four of them are critical.
+| Case | What it measures |
+| --- | --- |
+| `B01` | `claim` hands back the oldest queued job instead of the highest-priority one the caller can see. |
+| `B02` | `claim` and `complete` let a worker reach a job that belongs to a different tenant. |
+| `B03` | Saving the queue can leave a half-written, unreadable file behind if the write is interrupted. |
+| `R02` | An empty or blank job title must be rejected, without touching a separate, already-known defect nearby. |
+| `F01` | Add a `--priority` filter to `list` without changing anything else the command prints. |
+| `F04` | Add `--job <job-id>` to `claim` without changing how any existing command behaves. |
+| `R01` | Split argument scanning from command validation in `src/args.js` without changing any observable behavior. |
+
+An assertion is one automated check with a name and a dimension such as `functional`, `regression`, `security`, or `scope`. A critical assertion decides the result: if one of them fails, the run is unsolved. A non-critical assertion only reports something about the work without deciding it.
 
 An oracle is the code that decides those assertions. Oracles are deliberately kept out of this repository. A case measures a skill honestly only while the agent cannot read the answer, and the checks are the answer: they say exactly which behavior is expected and which files must stay untouched. Publishing them would make the measurement meaningless.
 
 So the oracles live in a separate private repository, cloned into `.private/` next to this one. `.private/sources/` holds the checks a person writes, and `.private/oracles/<case-id>/` holds the composed copies that SkillBench mounts when it grades a run. A composed oracle is produced by `npm --prefix .private run build` and is never edited by hand — the same rule the composed fixtures follow.
+
+### Grading reads a copy, not the agent's workspace
+
+A check is graded by running code the agent itself wrote. That is a problem if the check is handed the real, live workspace: the agent's code would know exactly where that workspace is, and could quietly repair a file for as long as one check runs, then put the damage back right after — turning a failing assertion green.
+
+So SkillBench never grades from the live workspace. Once a run finishes, it copies the whole finished project one time into a separate reference copy, and writes down what that copy contains — every file, with a fingerprint — before any check runs at all. Each check then gets its own disposable copy of the reference, never the reference itself and never the real workspace. A check can write anything it wants inside its own copy; it makes no difference, because the next check starts from a fresh one. Right before handing out each copy, SkillBench also checks that the reference itself still matches what was written down about it, so tampering is caught the moment it happens instead of only at the end. Wherever an assertion needs to know what is in the tree — which files exist, what changed — it reads that from the written-down description, not by walking a live directory.
+
+This closes the gap that let a check-scoped repair pass. It does not close every gap: the agent's code and the grader run as the same operating-system user, so a determined search of the filesystem could still find the reference copy sitting next to it. Closing that needs a boundary the operating system itself enforces — a separate user account, a container, or a read-only mount — and that is a later stage's work, not this one's.
+
+For two of the new cases, `F04` and `R01`, part of grading "did this also break anything that already worked" is a recorded command-line contract: a saved record of every command and every error the QueueDesk fixture answers today, captured once from the untouched fixture and replayed word for word against the agent's finished copy. Only the private repository holds this recording and the script that makes it.
 
 Without the private repository, most of this project still works:
 
@@ -236,10 +256,10 @@ node dist/src/cli.js validate --project . --public-only
 node dist/src/cli.js validate --project /path/to/benchmark --public-only
 ```
 
-This repository ships one case and one variant, so a successful validation prints:
+This repository ships seven cases and one variant, so a successful validation prints:
 
 ```text
-Validated 1 case and 1 variant.
+Validated 7 cases and 1 variant.
 ```
 
 Both forms print the same line. `--public-only` only skips the private oracle checks; it does not skip anything else. The full form needs the private repository cloned into `.private/`, and reports a missing oracle as a problem when it is not there.
@@ -290,7 +310,8 @@ Comparisons and Markdown reports are not implemented yet. Those artifacts belong
 - `--public-only` skips private oracle availability checks. All schema, reference, hash, and path checks still run.
 - Catalog paths reject traversal and symbolic links. Another local process can still replace a checked path between validation and later use.
 - Immutable JSON storage protects writes that happen one after another. Two local processes writing the same record at the same time can conflict because the standard `rename` operation on macOS and Linux can replace an existing file.
-- The repository ships one case, `B01`, and one variant, `control`, which uses no extra skill. The skill variants — OpenSpec, Superpowers, and LexForge — do not exist yet, so nothing can be compared. The rest of the twelve-case public suite, scoring, comparisons, and reports are planned for later stages.
+- The repository ships seven cases and one variant, `control`, which uses no extra skill. The skill variants — OpenSpec, Superpowers, and LexForge — do not exist yet, so nothing can be compared. Five more cases, plus scoring, comparisons, and reports, are planned for later stages.
+- Grading protects a check from another check's leftover changes and from a repair aimed at just one check, because every check reads a fresh copy of a reference tree that is re-checked against a written record before the copy is made. It does not protect against a search of the filesystem: the agent's code and the grader run as the same operating-system user. That needs a separate user account, a container, or a read-only mount, which is a later stage's work.
 
 ## Русский
 
@@ -358,13 +379,33 @@ QueueDesk — небольшая офлайн-очередь задач: ути�
 
 ### Кейсы и оракулы
 
-Кейс — это одна задача по программированию, которую бенчмарк даёт каждому варианту. Его манифест `cases/<case-id>/case.json` называет фикстуру для копирования, запрос, который получит агент, лимиты его работы, пути, которые ему разрешено менять, и список проверок-утверждений, по которым решают, справился ли он. В репозитории есть один кейс, `B01`: команда `queuedesk claim` выдаёт самую старую задачу из очереди вместо задачи с наивысшим приоритетом, и агента просят исправить причину, а не падающий тест.
+Кейс — это одна задача по программированию, которую бенчмарк даёт каждому варианту. Его манифест `cases/<case-id>/case.json` называет фикстуру для копирования, запрос, который получит агент, лимиты его работы, пути, которые ему разрешено менять, и список проверок-утверждений, по которым решают, справился ли он. В репозитории есть семь кейсов, и все они построены вокруг фикстуры QueueDesk:
 
-Утверждение — это одна автоматическая проверка со своим именем и измерением, например `functional`, `regression` или `scope`. Критическое утверждение решает исход: если хотя бы одно из них не выполнилось, запуск считается нерешённым. Некритическое утверждение только сообщает что-то о работе, но исход не решает. Кейс `B01` заявляет пять утверждений — три функциональных, одно на отсутствие поломок и одно на границы задачи, — и четыре из них критические.
+| Кейс | Что проверяет |
+| --- | --- |
+| `B01` | `claim` выдаёт самую старую задачу из очереди вместо задачи с наивысшим приоритетом, которую видит вызывающий. |
+| `B02` | `claim` и `complete` позволяют работнику добраться до задачи из чужого тенанта. |
+| `B03` | Сохранение очереди может оставить наполовину записанный, нечитаемый файл, если запись прервётся. |
+| `R02` | Пустой или состоящий из пробелов заголовок задачи нужно отклонить, не задев отдельный, уже известный дефект рядом. |
+| `F01` | Добавить в `list` фильтр `--priority`, не меняя ничего другого, что печатает эта команда. |
+| `F04` | Добавить в `claim` флаг `--job <job-id>`, не изменив поведение ни одной существующей команды. |
+| `R01` | Разделить разбор аргументов и проверку команды в `src/args.js`, не изменив ни одного наблюдаемого поведения. |
+
+Утверждение — это одна автоматическая проверка со своим именем и измерением, например `functional`, `regression`, `security` или `scope`. Критическое утверждение решает исход: если хотя бы одно из них не выполнилось, запуск считается нерешённым. Некритическое утверждение только сообщает что-то о работе, но исход не решает.
 
 Оракул — это код, который решает эти утверждения. Оракулы намеренно держат вне этого репозитория. Кейс честно измеряет скилл только пока агент не может прочитать ответ, а проверки и есть ответ: они прямо говорят, какое поведение ожидается и какие файлы должны остаться нетронутыми. Публикация проверок сделала бы измерение бессмысленным.
 
 Поэтому оракулы лежат в отдельном закрытом репозитории, который клонируют в каталог `.private/` рядом с этим проектом. В `.private/sources/` лежат проверки, которые пишет человек, а в `.private/oracles/<case-id>/` — собранные копии, которые SkillBench подключает во время оценки запуска. Собранный оракул создаёт команда `npm --prefix .private run build`, и его никогда не редактируют вручную — то же правило действует для собранных фикстур.
+
+### Оценка читает копию, а не рабочий каталог агента
+
+Проверку выполняет код, который написал сам агент. Это опасно, если проверке отдать настоящий, живой рабочий каталог: код агента будет точно знать, где этот каталог лежит, и сможет незаметно починить файл на время одной проверки, а сразу после неё вернуть поломку на место — и проваленное утверждение станет зелёным.
+
+Поэтому SkillBench никогда не оценивает работу по живому рабочему каталогу. Как только запуск завершается, SkillBench один раз копирует весь готовый проект в отдельную эталонную копию и записывает, что в ней лежит, — каждый файл вместе с его отпечатком, — ещё до того, как начнётся хоть одна проверка. Дальше каждая проверка получает свою одноразовую копию эталона — никогда сам эталон и никогда настоящий рабочий каталог. Проверка может писать в своей копии что угодно: это ничего не меняет, потому что следующая проверка начнёт со свежей копии. Перед тем как выдать очередную копию, SkillBench ещё раз сверяет эталон с тем, что было о нём записано, — так подмену ловят в момент, когда она случилась, а не только в самом конце. Всё, что утверждению нужно знать о состоянии дерева файлов — какие файлы есть, что изменилось, — оно читает из этой записи, а не обходя живой каталог.
+
+Это закрывает лазейку, через которую проходила починка на время одной проверки. Не закрывает это только одно: код агента и оценщик работают под одним и тем же пользователем операционной системы, так что упорный поиск по файловой системе всё равно может найти эталонную копию рядом. Закрыть и эту лазейку может только граница, которую обеспечивает сама операционная система, — отдельный пользователь, контейнер или каталог, доступный только для чтения. Это работа следующего этапа, не этого.
+
+Для двух новых кейсов, `F04` и `R01`, часть проверки «не сломал ли агент то, что уже работало» — это записанный контракт командной строки: сохранённая запись каждой команды и каждой ошибки, которую сегодня выдаёт фикстура QueueDesk, снятая один раз с нетронутой фикстуры и потом воспроизведённая слово в слово против готовой копии агента. Эта запись и скрипт, который её создаёт, есть только в закрытом репозитории.
 
 Без закрытого репозитория большая часть проекта всё равно работает:
 
@@ -526,10 +567,10 @@ node dist/src/cli.js validate --project . --public-only
 node dist/src/cli.js validate --project /path/to/benchmark --public-only
 ```
 
-В репозитории есть один кейс и один вариант, поэтому успешная проверка выводит:
+В репозитории есть семь кейсов и один вариант, поэтому успешная проверка выводит:
 
 ```text
-Validated 1 case and 1 variant.
+Validated 7 cases and 1 variant.
 ```
 
 Обе формы команды выводят одну и ту же строку. Флаг `--public-only` отключает только проверки закрытых оракулов и не отключает ничего другого. Полной форме нужен закрытый репозиторий, склонированный в `.private/`; без него она сообщает об отсутствующем оракуле как о проблеме.
@@ -580,4 +621,5 @@ Validated 1 case and 1 variant.
 - Флаг `--public-only` отключает проверку наличия закрытых оракулов. Проверки схем, ссылок, хешей и путей продолжают работать.
 - Пути каталога защищены от перехода в родительские каталоги и символических ссылок. Другая локальная программа всё ещё может заменить уже проверенный путь до его дальнейшего использования.
 - Хранилище неизменяемых JSON-файлов защищает записи, которые идут по очереди. Две локальные программы могут одновременно записывать один файл, потому что стандартная операция `rename` в macOS и Linux заменяет существующий файл.
-- В репозитории есть один кейс, `B01`, и один вариант, `control`, который не использует дополнительный скилл. Вариантов со скиллами — OpenSpec, Superpowers и LexForge — пока нет, поэтому сравнивать ещё нечего. Остальные кейсы из набора в двенадцать штук, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
+- В репозитории есть семь кейсов и один вариант, `control`, который не использует дополнительный скилл. Вариантов со скиллами — OpenSpec, Superpowers и LexForge — пока нет, поэтому сравнивать ещё нечего. Пять оставшихся кейсов, подсчёт результатов, сравнения и отчёты появятся на следующих этапах.
+- Оценка защищает проверку от того, что оставила после себя другая проверка, и от починки, рассчитанной ровно на одну проверку: каждая проверка получает свежую копию эталонного дерева, а эталон перед каждой копией сверяют с записанным о нём описанием. От поиска по файловой системе это не защищает: код агента и оценщик работают под одним и тем же пользователем операционной системы. Для этого нужен отдельный пользователь, контейнер или каталог только для чтения — это работа следующего этапа.
