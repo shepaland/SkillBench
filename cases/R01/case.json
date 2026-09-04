@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "R01",
+  "title": "Split argument scanning from command validation",
+  "categories": ["refactoring"],
+  "fixture": {
+    "path": "fixtures/queuedesk",
+    "contentHash": "sha256:c1d69000c990dfdd7b2358cb3d74a358dc1daab761ced72905bb614d12140325"
+  },
+  "promptSteps": [
+    {
+      "id": "request",
+      "prompt": "`parseArgs` in src/args.js does two jobs at once: it walks the argument list collecting flags, and it decides whether a particular command has what it needs. Please separate them. Keep `parseArgs(argv)` exactly as callers see it today, and add an exported `scanFlags(argv)` that takes the arguments after the command name and returns `{ flags, positional }`: `flags` maps each option to its value, using `true` for `--json` and `--all-tenants`, and `positional` holds the remaining arguments in order. `scanFlags` reports a flag without a value and an unknown flag the same way the code does today; deciding what a command requires stays in `parseArgs`. This is a rearrangement, not a change: every message, every exit code, and every accepted invocation stays exactly as it is. Run `npm test` in the project root to check your work."
+    }
+  ],
+  "publicVerification": [{ "executor": "npm", "args": ["test"] }],
+  "limits": { "wallClockMs": 900000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["src", "tests"],
+  "forbiddenChangePaths": ["DECISIONS.md", "README.md", "examples", "package.json"],
+  "assertions": [
+    { "id": "regression-cli-contract", "dimension": "regression", "critical": true },
+    { "id": "regression-public-suite", "dimension": "regression", "critical": true },
+    { "id": "functional-parse-split", "dimension": "functional", "critical": true },
+    { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
+  ]
+}

@@ -156,8 +156,10 @@ test("a private oracle changed after freezing reports errored at the grade step"
 
 test("a private oracle changed while the checks ran reports errored at the grade step", async () => {
   // A check runs code the measured agent wrote, so the grading directory can be
-  // rewritten between the pre-run hash and the last assertion. The assertions of such
-  // a run cannot be trusted, whatever they say.
+  // rewritten between the pre-run hash and the last assertion. `runOracle` itself now
+  // catches this the instant its own after-loop hash disagrees with the hash it took
+  // before the single check ran, before `executeRun`'s own frozen-hash comparison (a
+  // second, independent line of defense — see the test below) ever gets a turn.
   const harness = await createHarness(async (project) => {
     await writeFile(
       join(project.oracleDirectory, "checks/assert-1.js"),
@@ -175,73 +177,133 @@ test("a private oracle changed while the checks ran reports errored at the grade
 
   assert.equal(result.status, "errored");
   assert.equal(result.failedStep, "grade");
-  assert.match(result.failureMessage, /private oracle changed while the checks ran/u);
-  assert.match(result.failureMessage, /mounted sha256:[0-9a-f]{64}/u);
-  assert.match(result.failureMessage, /frozen sha256:[0-9a-f]{64}/u);
+  assert.match(result.failureMessage, /the mounted oracle changed while the checks ran: .+/u);
   assert.equal(result.assertions.length, 0);
 });
+
+/**
+ * A check no longer receives the real materialized workspace directly — SKILLBENCH_WORKSPACE
+ * now names a disposable copy. To reach the tree these two guard tests care about, the check
+ * has to search for it, the same way the reference-tree guard assumes an attacker might: by
+ * the "skillbench-workspace-" prefix materializeWorkspace uses, under a temp parent private to
+ * this test so the search cannot collide with any other test's workspace.
+ */
+function findWorkspaceScript(tempParent: string, body: readonly string[]): string {
+  return [
+    'import { readdirSync, rmSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    `const root = ${JSON.stringify(tempParent)};`,
+    'const entry = readdirSync(root).find((name) => name.startsWith("skillbench-workspace-"));',
+    'const workspace = join(root, entry, "workspace");',
+    ...body,
+    "process.exit(0);",
+    "",
+  ].join("\n");
+}
 
 test("a workspace changed while the checks ran reports errored at the grade step", async () => {
   // A check runs code the measured agent wrote, so that code can repair the workspace
   // between the final snapshot and the last assertion. The assertions then describe a
   // tree that no longer exists, so they cannot be trusted, whatever they say.
+  const tempParent = await mkdtemp(join(tmpdir(), "skillbench-workspace-guard-"));
   const harness = await createHarness(async (project) => {
     await writeFile(
       join(project.oracleDirectory, "checks/assert-1.js"),
-      [
-        'import { rmSync, writeFileSync } from "node:fs";',
-        'import { join } from "node:path";',
-        "const workspace = process.env.SKILLBENCH_WORKSPACE;",
+      findWorkspaceScript(tempParent, [
         'writeFileSync(join(workspace, "planted.txt"), "restored\\n");',
         'writeFileSync(join(workspace, "index.js"), "export const queued = [1];\\n");',
         'rmSync(join(workspace, ".agent/skills/example/SKILL.md"));',
-        "process.exit(0);",
-        "",
-      ].join("\n"),
+      ]),
     );
   });
 
-  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2dd"));
+  try {
+    const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2dd", { tempParent }));
 
-  assert.equal(result.status, "errored");
-  assert.equal(result.failedStep, "grade");
-  assert.match(result.failureMessage, /the workspace changed while the checks ran/u);
-  assert.match(result.failureMessage, /added planted\.txt/u);
-  assert.match(result.failureMessage, /modified index\.js/u);
-  assert.match(result.failureMessage, /removed \.agent\/skills\/example\/SKILL\.md/u);
-  assert.equal(result.assertions.length, 0);
+    assert.equal(result.status, "errored");
+    assert.equal(result.failedStep, "grade");
+    assert.match(result.failureMessage, /the workspace changed while the checks ran/u);
+    assert.match(result.failureMessage, /added planted\.txt/u);
+    assert.match(result.failureMessage, /modified index\.js/u);
+    assert.match(result.failureMessage, /removed \.agent\/skills\/example\/SKILL\.md/u);
+    assert.equal(result.assertions.length, 0);
+  } finally {
+    await rm(tempParent, { recursive: true, force: true });
+  }
 });
 
 test("a large change set produces a bounded failure message that names the omitted count", async () => {
   // A check can plant thousands of paths in one pass. failureMessage is written verbatim
   // into result.json, a shared durable artifact, so the path list must stay bounded like
   // run-oracle's truncated `detail`, not grow without limit.
+  const tempParent = await mkdtemp(join(tmpdir(), "skillbench-workspace-guard-"));
   const harness = await createHarness(async (project) => {
     await writeFile(
       join(project.oracleDirectory, "checks/assert-1.js"),
-      [
-        'import { writeFileSync } from "node:fs";',
-        'import { join } from "node:path";',
-        "const workspace = process.env.SKILLBENCH_WORKSPACE;",
+      findWorkspaceScript(tempParent, [
         "for (let i = 0; i < 2000; i += 1) {",
         '  writeFileSync(join(workspace, `planted-${String(i).padStart(4, "0")}.txt`), "tampered\\n");',
         "}",
+      ]),
+    );
+  });
+
+  try {
+    const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2df", { tempParent }));
+
+    assert.equal(result.status, "errored");
+    assert.equal(result.failedStep, "grade");
+    assert.match(result.failureMessage, /the workspace changed while the checks ran/u);
+    assert.ok(
+      result.failureMessage.length < 1000,
+      `expected a bounded message, got ${String(result.failureMessage.length)} chars`,
+    );
+    assert.match(result.failureMessage, /and \d+ more paths? omitted/u);
+  } finally {
+    await rm(tempParent, { recursive: true, force: true });
+  }
+});
+
+test("a determined check that finds the material root by searching still trips the mid-run guard", async () => {
+  // A check still cannot normally learn the material root's path, but a resourceful
+  // attacker could find it the same way the workspace guard tests above find the
+  // workspace: by the "skillbench-grading-material-" prefix `createGradingArea` uses,
+  // searched for under a temp parent private to this test so it cannot collide with any
+  // other test's material root.
+  const assertions: readonly AssertionDeclaration[] = [
+    { id: "tamper", dimension: "functional", critical: false },
+    { id: "after", dimension: "functional", critical: false },
+  ];
+  const tempParent = await mkdtemp(join(tmpdir(), "skillbench-material-guard-"));
+  const harness = await createHarness(async (project) => {
+    await writeOracleForAssertions(project, assertions);
+    await writeFile(
+      join(project.oracleDirectory, "checks/tamper.js"),
+      [
+        'import { readdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        `const root = ${JSON.stringify(tempParent)};`,
+        'const entry = readdirSync(root).find((name) => name.startsWith("skillbench-grading-material-"));',
+        'writeFileSync(join(root, entry, "reference", "index.js"), "export const queued = [1];\\n");',
         "process.exit(0);",
         "",
       ].join("\n"),
     );
+    await writeJson(project.caseManifestPath, { ...project.caseManifest, assertions });
   });
 
-  const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2df"));
+  try {
+    const result = await executeRun(await runInput(harness, "20260830T175302Z-a1b2e1", { tempParent }));
 
-  assert.equal(result.status, "errored");
-  assert.equal(result.failedStep, "grade");
-  assert.match(result.failureMessage, /the workspace changed while the checks ran/u);
-  assert.ok(
-    result.failureMessage.length < 1000,
-    `expected a bounded message, got ${String(result.failureMessage.length)} chars`,
-  );
-  assert.match(result.failureMessage, /and \d+ more paths? omitted/u);
+    assert.equal(result.status, "errored");
+    assert.equal(result.failedStep, "grade");
+    // Named exactly, because three guards can report a change while the checks ran — the
+    // workspace guard, the mounted-oracle guard, and this one. Only the reference tree
+    // was touched here, so only `verifyMaterial()`'s message proves the right one fired.
+    assert.match(result.failureMessage, /^the graded copy changed while the checks ran: modified index\.js$/u);
+  } finally {
+    await rm(tempParent, { recursive: true, force: true });
+  }
 });
 
 test("an exhausted adapter reports exhausted and still grades", async () => {

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "F04",
+  "title": "Claim a named job",
+  "categories": ["bounded-feature", "compatibility"],
+  "fixture": {
+    "path": "fixtures/queuedesk",
+    "contentHash": "sha256:c1d69000c990dfdd7b2358cb3d74a358dc1daab761ced72905bb614d12140325"
+  },
+  "promptSteps": [
+    {
+      "id": "request",
+      "prompt": "Dispatchers want to hand a specific job to a worker instead of taking whatever comes next. Please add `--job <job-id>` to `queuedesk claim`, which claims exactly that job when the caller can see it and it is still queued. A job the caller cannot see answers the way a missing job does, exit code 2; a job that is not queued is an invalid transition, exit code 3; a malformed identifier is a usage error, exit code 1. Every existing invocation must keep behaving exactly as it does today, including `claim` with no flag. Run `npm test` in the project root to check your work."
+    }
+  ],
+  "publicVerification": [{ "executor": "npm", "args": ["test"] }],
+  "limits": { "wallClockMs": 900000, "outputBytes": 4000000, "tokenLimit": 400000 },
+  "allowedChangePaths": ["src", "tests"],
+  "forbiddenChangePaths": ["DECISIONS.md", "README.md", "examples", "package.json"],
+  "assertions": [
+    { "id": "functional-claim-targeted", "dimension": "functional", "critical": true },
+    { "id": "regression-cli-contract", "dimension": "regression", "critical": true },
+    { "id": "regression-public-suite", "dimension": "regression", "critical": true },
+    { "id": "scope-untouched-files", "dimension": "scope", "critical": true }
+  ]
+}

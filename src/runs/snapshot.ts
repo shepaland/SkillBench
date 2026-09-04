@@ -117,3 +117,34 @@ function isInside(prefix: string, path: string): boolean {
 function comparePaths(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left), Buffer.from(right));
 }
+
+// A change description is written verbatim into result.json, a shared durable artifact,
+// and printed to stderr, so it is capped the same way run-oracle's `detail` is.
+const DESCRIBE_CHANGES_LIMIT = 500;
+
+/**
+ * Names as many paths of a change set as fit within the limit, so an investigator
+ * reading a rejected run learns what moved without the message growing unbounded when a
+ * check plants thousands of paths in one pass.
+ */
+export function describeChanges(changes: ChangeSet): string {
+  const entries = [
+    ...changes.added.map((path) => `added ${path}`),
+    ...changes.modified.map((path) => `modified ${path}`),
+    ...changes.removed.map((path) => `removed ${path}`),
+  ];
+
+  const kept: string[] = [];
+  let length = 0;
+  for (const entry of entries) {
+    const nextLength = length + (kept.length > 0 ? 2 : 0) + entry.length;
+    if (nextLength > DESCRIBE_CHANGES_LIMIT) break;
+    kept.push(entry);
+    length = nextLength;
+  }
+
+  const omitted = entries.length - kept.length;
+  if (omitted === 0) return kept.join(", ");
+  const suffix = `and ${String(omitted)} more path${omitted === 1 ? "" : "s"} omitted`;
+  return kept.length === 0 ? suffix : `${kept.join(", ")} (${suffix})`;
+}

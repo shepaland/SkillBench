@@ -3,6 +3,7 @@ import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
 import type { AssertionDeclaration, TranscriptRule } from "../domain/model.js";
 import { hashTree } from "../integrity/content-hash.js";
 import type { RuntimeAdapter, RuntimeExecution } from "../runtime/runtime-adapter.js";
+import { createGradingArea, type GradingArea } from "../oracles/grading-area.js";
 import { OracleLifecycle } from "../oracles/oracle-lifecycle.js";
 import { loadOracleManifest } from "../oracles/oracle-manifest.js";
 import { runOracle, type AssertionResult } from "../oracles/run-oracle.js";
@@ -14,6 +15,7 @@ import { materializeWorkspace, type MaterializedWorkspace } from "../workspace/m
 import { freezeRunInputs, type RunConfiguration } from "./freeze-inputs.js";
 import { RunEvidenceWriter, type PipelineStep, type RunResult, type RunStatus } from "./result.js";
 import {
+  describeChanges,
   diffSnapshots,
   observeChangePaths,
   snapshotTree,
@@ -60,6 +62,7 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
 
   let workspace: MaterializedWorkspace | undefined;
   let lifecycle: OracleLifecycle | undefined;
+  let gradingArea: GradingArea | undefined;
   let step: PipelineStep = "materialize";
   let baseline: TreeSnapshot = [];
   let execution: RuntimeExecution | undefined;
@@ -149,13 +152,20 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
       );
     }
     const oracleManifest = await loadOracleManifest(mounted.gradingPath, input.validator);
+    // Grading reads a copy and a description recorded here, not the workspace itself:
+    // a check runs code the agent wrote, and that code knows the workspace's path.
+    gradingArea = await createGradingArea({
+      workspacePath: workspace.workspacePath,
+      snapshot: finalSnapshot,
+      ...(input.tempParent === undefined ? {} : { tempParent: input.tempParent }),
+    });
     const oracleResults = await runOracle({
       manifest: oracleManifest,
       assertions: input.catalogCase.manifest.assertions.filter(
         ({ transcriptRuleId }) => transcriptRuleId === undefined,
       ),
       gradingPath: mounted.gradingPath,
-      workspacePath: workspace.workspacePath,
+      gradingArea,
     });
     // A check runs code the measured agent wrote, so the grading directory is hashed
     // again once every check has finished. An oracle that changed during grading may
@@ -208,6 +218,8 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
     // Cleanup the adapter could not complete is recorded like any other cleanup
     // failure: it belongs beside the run outcome, never in place of it.
     cleanupFailures.push(...execution?.cleanupFailures ?? []);
+    const gradingAreaFailure = await cleanupQuietly(gradingArea, "grading area");
+    if (gradingAreaFailure !== undefined) cleanupFailures.push(gradingAreaFailure);
     const oracleFailure = await cleanupQuietly(lifecycle, "oracle");
     if (oracleFailure !== undefined) cleanupFailures.push(oracleFailure);
     if (input.keepWorkspace === true) {
@@ -250,37 +262,6 @@ export async function executeRun(input: ExecuteRunInput): Promise<RunResult> {
 
 function isChanged(changes: ChangeSet): boolean {
   return changes.added.length + changes.modified.length + changes.removed.length > 0;
-}
-
-// failureMessage is written verbatim into result.json, a shared durable artifact, and
-// printed to stderr — the same reason run-oracle's `detail` is capped at 500 characters.
-const DESCRIBE_CHANGES_LIMIT = 500;
-
-/**
- * Names as many paths of a change set as fit within the limit, so an investigator
- * reading a rejected run learns what moved without the message growing unbounded when a
- * check plants thousands of paths in one pass.
- */
-function describeChanges(changes: ChangeSet): string {
-  const entries = [
-    ...changes.added.map((path) => `added ${path}`),
-    ...changes.modified.map((path) => `modified ${path}`),
-    ...changes.removed.map((path) => `removed ${path}`),
-  ];
-
-  const kept: string[] = [];
-  let length = 0;
-  for (const entry of entries) {
-    const nextLength = length + (kept.length > 0 ? 2 : 0) + entry.length;
-    if (nextLength > DESCRIBE_CHANGES_LIMIT) break;
-    kept.push(entry);
-    length = nextLength;
-  }
-
-  const omitted = entries.length - kept.length;
-  if (omitted === 0) return kept.join(", ");
-  const suffix = `and ${String(omitted)} more path${omitted === 1 ? "" : "s"} omitted`;
-  return kept.length === 0 ? suffix : `${kept.join(", ")} (${suffix})`;
 }
 
 function mergeAssertions(

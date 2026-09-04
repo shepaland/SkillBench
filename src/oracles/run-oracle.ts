@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
 import type { AssertionDeclaration, OracleCheck, OracleManifest } from "../domain/model.js";
+import { FileLifecycleError } from "../domain/file-lifecycle-error.js";
+import { hashTree } from "../integrity/content-hash.js";
 import { ProjectPaths } from "../paths/project-paths.js";
+import type { GradingArea } from "./grading-area.js";
 import { assertOracleCoversAssertions } from "./oracle-manifest.js";
 
 export type AssertionOutcome = "passed" | "failed" | "error";
@@ -37,7 +40,8 @@ export interface RunOracleInput {
   readonly manifest: OracleManifest;
   readonly assertions: readonly AssertionDeclaration[];
   readonly gradingPath: string;
-  readonly workspacePath: string;
+  /** Supplies the frozen evidence and one disposable workspace copy per check. */
+  readonly gradingArea: GradingArea;
   readonly spawn?: OracleSpawn;
   readonly nowMs?: () => number;
 }
@@ -75,10 +79,28 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
   const nowMs = input.nowMs ?? (() => Date.now());
   const checkById = new Map(input.manifest.checks.map((check) => [check.assertionId, check]));
   const gradingPaths = await ProjectPaths.create(input.gradingPath);
-  const env = {
+  const baseEnvironment = {
     ...filterEnvironment(process.env),
-    SKILLBENCH_WORKSPACE: input.workspacePath,
     SKILLBENCH_ORACLE: input.gradingPath,
+    SKILLBENCH_EVIDENCE: input.gradingArea.evidencePath,
+  };
+
+  // Each check also runs inside the mounted oracle itself — as its own working
+  // directory, per `oracle.json`'s `workingDirectory` — which sits right next to
+  // `baseline.json`, `contract.json`, and the carried `tests/`. Hashed once here, then
+  // re-hashed and compared immediately before every check and once more after the last
+  // one, a repair made to that directory during grading is caught the instant SkillBench
+  // next looks, the same way `verifyMaterial()` already catches one made to the
+  // reference tree.
+  const gradingDirectoryHash = await hashTree(input.gradingPath);
+  const verifyGradingDirectory = async (): Promise<void> => {
+    const currentHash = await hashTree(input.gradingPath);
+    if (currentHash !== gradingDirectoryHash) {
+      throw new FileLifecycleError(
+        "CONTENT_HASH_MISMATCH",
+        `the mounted oracle changed while the checks ran: ${input.gradingPath}`,
+      );
+    }
   };
 
   const results: AssertionResult[] = [];
@@ -87,8 +109,28 @@ export async function runOracle(input: RunOracleInput): Promise<readonly Asserti
     if (check === undefined) {
       throw new Error(`assertion ${assertion.id} has no oracle check after correspondence validation`);
     }
-    results.push(await executeCheck(assertion, check, gradingPaths, env, spawn, nowMs));
+
+    await verifyGradingDirectory();
+    // The reference and the evidence file are both verified immediately before the copy is
+    // taken, so a repair has to be in place exactly when SkillBench looks. Restoring it
+    // afterwards no longer helps: the tree this check reads was built from what was
+    // verified, not from what is left at the end.
+    await input.gradingArea.verifyMaterial();
+    const copy = await input.gradingArea.createCheckCopy();
+    try {
+      const env = { ...baseEnvironment, SKILLBENCH_WORKSPACE: copy.path };
+      results.push(await executeCheck(assertion, check, gradingPaths, env, spawn, nowMs));
+    } finally {
+      await copy.remove();
+    }
   }
+  await verifyGradingDirectory();
+  // The final check's own copy was made from material verified right before it, but a
+  // change the final check itself makes — typically the scope check, since nothing runs
+  // after it — was never checked against afterwards. Verifying once more here closes
+  // that: the run is graded from the loop above only once this confirms nothing changed
+  // during it, from the first check's copy to the last.
+  await input.gradingArea.verifyMaterial();
   return Object.freeze(results);
 }
 
